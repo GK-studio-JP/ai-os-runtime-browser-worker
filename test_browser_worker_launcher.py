@@ -107,6 +107,24 @@ class ModelCommandTests(unittest.TestCase):
             )
 
 
+    def test_normalizes_fill_and_click_alias_args(self):
+        observation = {"generation": 4}
+
+        action, args = _validate_model_action(
+            {"action": "fill", "args": {"id": "g4-e8", "value": "hello"}},
+            observation,
+        )
+        self.assertEqual(action, "fill")
+        self.assertEqual(args, {"elementId": "g4-e8", "text": "hello"})
+
+        action, args = _validate_model_action(
+            {"action": "click", "args": {"id": "g4-e9"}},
+            observation,
+        )
+        self.assertEqual(action, "click")
+        self.assertEqual(args, {"elementId": "g4-e9"})
+
+
 class ProtocolTests(unittest.TestCase):
     def test_protocol_payload_parses_fenced_json(self):
         body = """<!-- ai-bb:v1 -->
