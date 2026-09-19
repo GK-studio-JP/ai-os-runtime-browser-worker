@@ -25,7 +25,7 @@ jobs:
           if [ "$out" = "NO_DISPATCH" ]; then
             echo "No Browser Worker dispatch."
           else
-            printf '%s\\n' "$out"
+            printf '%s\n' "$out"
           fi
 
       - name: Explain production launch ownership
