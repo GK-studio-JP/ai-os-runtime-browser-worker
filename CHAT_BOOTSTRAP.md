@@ -12,7 +12,7 @@ Read WORKER.md in:
 https://github.com/GK-studio-JP/ai-os-runtime-browser-worker
 
 Then read the current Browser Agent operating instructions in:
-https://github.com/kj2whvbzjn-hue/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md
+https://github.com/GK-studio-JP/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md
 
 Use Browser Agent to open the canonical bulletin board:
 https://github.com/GK-studio-JP/ai-bulletin-board/issues
