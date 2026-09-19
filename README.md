@@ -1,162 +1,131 @@
-# ai-os-runtime
+# ai-os-runtime-browser-worker
 
-`ai-os-runtime` is the provider-neutral execution runtime for the GitHub-native AI microkernel OS.
+`ai-os-runtime-browser-worker` is the experimental Browser Chat Worker path for the GitHub-native AI OS.
 
-It sits **after** Scheduler selection and Kernel identity validation. It does not decide task priority, grant capabilities, or make GitHub state authoritative by itself.
+It does **not** replace the API/subprocess runtime. The preserved provider-neutral runtime remains:
+
+`GK-studio-JP/ai-os-runtime`
+
+This fork explores a different execution model: give a Chat Worker a small bootstrap, a run-scoped identity, the Browser Agent operating instructions, and the canonical bulletin-board URL. The Worker then pulls the live task from GitHub, performs the work through Browser Agent and other allowed tools, and reports coordination events back to the canonical Issue.
 
 ```text
-GK-studio-JP/ai-bulletin-board
-        |
-        v
- ai-os-context
-        |
-        v
-ai-os-scheduler
-        |
-        v
- ai-os-kernel
-        |
-        v
- ai-os-runtime
-   |         \
-   |          +--> Compute Driver (LLM / manual / API)
+Scheduler / Kernel routing
+          |
+          v
+small Chat bootstrap + agent_id
+          |
+          v
+Browser Chat Worker
+   |             \
+   |              +--> Browser Agent --> GitHub / Web systems
    |
-   +--> canonical event proposal
-             |
-             v
-     Kernel + persistence driver
+   +--> canonical bulletin board
+        read task -> CLAIM -> PROGRESS -> RESULT
 ```
 
-## Runtime loop
+## Canonical sources
 
-The v0.1 runtime implements four deterministic boundaries:
+Canonical coordination journal:
 
-1. `preflight`: compare a Worker boot bundle with a **fresh canonical replay**.
-2. `prepare`: when ownership is confirmed, build a bounded `ai-os-worker-invocation:v1`.
-3. `normalize`: validate a structured Worker result and convert it into a non-authoritative runtime outcome.
-4. `gate`: compare the outcome with another **fresh canonical replay** before producing a persistable canonical event proposal.
+`https://github.com/GK-studio-JP/ai-bulletin-board/issues`
 
-The Runtime never treats an LLM's statement that work is complete as completion. A `RESULT` remains only a proposal until an authorized persistence driver appends it to the canonical Issue and a later replay confirms it.
+Canonical board protocol:
 
-## Preflight states
+`https://github.com/GK-studio-JP/ai-bulletin-board/blob/main/protocol/GITHUB_PROTOCOL.md`
 
-`preflight` fails closed:
+Browser Agent:
 
-- `CLAIM_REQUIRED`: task is open and can only proceed after a CLAIM is persisted.
-- `READY`: task is claimed by the requested Worker and the boot context is still current.
-- `WAIT`: another Worker owns the live lease.
-- `STALE_CONTEXT`: the canonical Issue has changed since the capsule was built.
-- `STOP`: task is completed or history is unsafe.
+`https://github.com/kj2whvbzjn-hue/browser-agent`
 
-Example:
+Browser Agent operating instructions:
 
-```bash
-python runtime.py preflight \
-  --boot worker/boot.json \
-  --capsule worker/capsule.json \
-  --fresh runtime/fresh-replay.json \
-  --worker-id worker-001 \
-  --output runtime/preflight.json
+`https://github.com/kj2whvbzjn-hue/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md`
+
+Chat history, Browser Agent relay state, generated projections, and model memory are working context only. They are not canonical coordination state.
+
+## Worker contract
+
+The active browser-worker contract is split into three small files:
+
+- `WORKER.md`: full Browser Chat Worker protocol.
+- `CHAT_BOOTSTRAP.md`: minimal startup instruction for a Chat Worker.
+- `process.json`: process identity and boundary metadata for `PROC-RUNTIME-BROWSER-WORKER`.
+
+The task body itself stays on the bulletin board. A launcher may provide an Issue number as a pointer, but the Worker reads the current Issue body and comments from GitHub before acting.
+
+## Execution loop
+
+A normal run is:
+
+1. Start the Chat Worker with one run-scoped `agent_id`.
+2. Read `WORKER.md` and the current Browser Agent instructions.
+3. Open the canonical bulletin board with Browser Agent.
+4. Resolve only the task explicitly routed to this Worker/process.
+5. Replay the canonical Issue history and fail closed on `history_unsafe`.
+6. Append CLAIM.
+7. Re-fetch/replay and begin work only if this `agent_id` is the live winning owner.
+8. Use Browser Agent to inspect and operate the target system.
+9. Append PROGRESS checkpoints for long work.
+10. Before completion, re-fetch/replay ownership and verify immutable artifacts.
+11. Append RESULT.
+12. End the browser session when no continued session is required.
+
+The Scheduler still owns task ordering. The Worker must not choose among ambiguous tasks or invent priority.
+
+## Authority boundary
+
+Browser access is not authority by itself.
+
+The Worker does not gain capabilities merely because:
+
+- it has an `agent_id`;
+- a Chat model says an action is allowed;
+- Browser Agent can see or click a control;
+- a generated projection suggests a task is runnable.
+
+Platform permissions, user authorization, Kernel policy, and the canonical board protocol remain separate boundaries.
+
+Never publish credentials, tokens, cookies, passwords, private keys, authentication headers, or sensitive Browser Agent observations to the bulletin board.
+
+## Preserved API runtime baseline
+
+This repository was cloned from `GK-studio-JP/ai-os-runtime`. The following inherited files remain for comparison and migration work:
+
+- `runtime.py`
+- `driver_runner.py`
+- `test_runtime.py`
+- the existing runtime workflows
+
+Those files represent the API/subprocess provider-neutral execution path. New API-runtime development should continue in `GK-studio-JP/ai-os-runtime`; browser-worker-specific development belongs here.
+
+The inherited Runtime pipeline is:
+
+```text
+Worker Boot Bundle
+  -> fresh preflight
+  -> ai-os-worker-invocation:v1
+  -> replaceable compute driver
+  -> ai-os-worker-result:v1
+  -> normalize
+  -> fresh postflight gate
 ```
 
-If `CLAIM_REQUIRED`, the output contains a deterministic `CLAIM` proposal. Persisting it is outside Runtime authority.
+Keeping that baseline in the clone makes it possible to compare the two execution approaches without removing the original implementation.
 
-## Worker invocation
+## Integration status
 
-After a fresh replay confirms the same Worker owns the task:
+Implemented in this fork:
 
-```bash
-python runtime.py prepare \
-  --boot worker/boot.json \
-  --capsule worker/capsule.json \
-  --preflight runtime/preflight.json \
-  --driver manual \
-  --output runtime/invocation.json
-```
+- Browser Chat Worker protocol;
+- minimal Chat bootstrap;
+- dedicated process metadata;
+- canonical board pull/claim/progress/result rules;
+- Browser Agent lifecycle and privacy rules.
 
-The invocation contains only the selected dispatch and its single Context Capsule. It is provider-neutral: a manual ChatGPT session, API model, or another compute provider can consume the same envelope.
+Still required for full control-plane integration:
 
-## Compute driver adapter
+- register `PROC-RUNTIME-BROWSER-WORKER` in the Kernel process registry;
+- add an explicit Scheduler routing target for the browser-worker process;
+- add an end-to-end smoke path that launches a Browser Chat Worker from a routed task and verifies the resulting canonical protocol events.
 
-`driver_runner.py` provides the first replaceable compute boundary without making any provider authoritative. It launches one operator-selected subprocess, writes the complete `ai-os-worker-invocation:v1` JSON to that process on stdin, and requires exactly one `ai-os-worker-result:v1` JSON object on stdout.
-
-Before returning a result, the runner checks the invocation fingerprint and Worker identity. A non-zero driver exit fails closed, and driver stderr is not copied into the Runtime error message because provider adapters may use stderr for diagnostic data that must not leak into coordination state.
-
-Example:
-
-```bash
-python driver_runner.py run \
-  --invocation runtime/invocation.json \
-  --output worker-result.json \
-  -- python path/to/provider_adapter.py
-
-python runtime.py normalize \
-  --invocation runtime/invocation.json \
-  --result worker-result.json \
-  --output runtime/outcome.json
-```
-
-The adapter is intentionally outside Kernel authority. It may call an LLM, a manual bridge, or another compute service, but it must return the structured result contract and must not mutate the canonical bulletin board directly.
-
-## Worker result
-
-A compute driver returns:
-
-```json
-{
-  "schema": "ai-os-worker-result:v1",
-  "invocation_fingerprint": "sha256:...",
-  "worker_id": "worker-001",
-  "status": "completed",
-  "summary": "Implemented and tested the requested change.",
-  "next_action": null,
-  "artifacts": ["commit:abc123"],
-  "requests": []
-}
-```
-
-Supported statuses are `progress`, `completed`, `blocked`, `page_fault`, and `failed`.
-
-Normalize it:
-
-```bash
-python runtime.py normalize \
-  --invocation runtime/invocation.json \
-  --result worker-result.json \
-  --output runtime/outcome.json
-```
-
-## Postflight gate
-
-Before persistence, replay the canonical Issue again and gate the outcome:
-
-```bash
-aios-context replay \
-  --repo GK-studio-JP/ai-bulletin-board \
-  --issue 123 \
-  --output runtime/fresh-after.json
-
-python runtime.py gate \
-  --boot worker/boot.json \
-  --fresh runtime/fresh-after.json \
-  --outcome runtime/outcome.json \
-  --output runtime/gate.json
-```
-
-`eligible_for_persistence=true` means only that Runtime's deterministic safety checks passed. It is **not** a capability grant. Kernel authorization and a persistence driver are still required.
-
-## Invariants
-
-- `GK-studio-JP/ai-bulletin-board` is the live canonical coordination journal.
-- Context Capsules, dispatch plans, boot bundles, invocations, outcomes, and gates are non-authoritative.
-- A Worker cannot execute from stale context.
-- A Worker cannot persist a result without a live matching ownership lease.
-- A result never completes a task by itself.
-- Missing context becomes `page_fault`; it is not guessed.
-- Compute providers are replaceable.
-- Runtime does not choose task priority and does not grant capabilities.
-
-## Workflows
-
-- `.github/workflows/test.yml` runs unit tests.
-- `.github/workflows/live-preflight.yml` rebuilds the current control-plane projection from the canonical board and runs Runtime preflight for at most one selected task. It never mutates the board.
+Until those integration steps are complete, this repository defines the Worker contract but is not yet an automatically dispatched production Worker.
