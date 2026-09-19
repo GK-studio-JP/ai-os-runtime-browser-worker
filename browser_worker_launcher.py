@@ -479,13 +479,13 @@ Worker protocol: {WORKER_DOC}
 Browser Agent instructions: {BROWSER_DOC}
 Canonical claim state: {claim_state}
 The task body is NOT injected here. Read it from the canonical Issue through Browser Agent observations.
-Follow WORKER.md: canonical replay -> CLAIM -> replay ownership -> work -> replay -> RESULT.
+The launcher owns canonical CLAIM and RESULT serialization and submission. Do not write CLAIM/RESULT comments yourself.
 Work only on {task}. Use only current-generation element IDs. Never put secrets/cookies/credentials in public Issues.
-Before CLAIM is verified, the launcher only permits read-only navigation plus writing/submitting the CLAIM comment on the canonical Issue.
-Return exactly ONE JSON object and no prose.
+Navigate and verify the requested work. When the acceptance criteria are verified, return finish with a concise summary and immutable artifacts.
+Return exactly ONE strict JSON object and no prose. JSON strings must be valid JSON.
 Allowed shapes:
 {{"kind":"browser_action","action":"goto|getPage|fill|click|press|typeText|clickText|scroll|setViewport","args":{{...}},"reason":"..."}}
-{{"kind":"finish","reason":"RESULT was appended and verified."}}
+{{"kind":"finish","summary":"verified completion summary","artifacts":["commit:abc123"],"reason":"Ready for launcher to append RESULT."}}
 {{"kind":"wait","reason":"..."}}
 Step: {step}
 Previous launcher feedback: {feedback}
@@ -496,6 +496,74 @@ CURRENT WORK-TAB OBSERVATION:
 def comments(token: str | None, issue: int) -> list[dict[str, Any]]:
     data = github(f"/repos/{BOARD}/issues/{issue}/comments?per_page=100", token=token)
     return data if isinstance(data, list) else []
+
+
+def protocol_event_body(
+    event_type: str,
+    *,
+    agent_id: str,
+    task: str,
+    summary: str,
+    next_action: str | None,
+    artifacts: list[str],
+) -> str:
+    payload = {
+        "type": event_type,
+        "agent_id": agent_id,
+        "task": task,
+        "idempotency_key": f"{agent_id}:{task}:{event_type.lower()}",
+        "summary": summary,
+        "next_action": next_action,
+        "artifacts": artifacts,
+    }
+    return "<!-- ai-bb:v1 -->\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def append_issue_comment(relay: Relay, issue_url: str, body: str) -> None:
+    relay.command("switchPage", {"index": 0})
+    relay.command("goto", {"url": issue_url})
+    page = relay.command("getPage", {})
+    box = next(
+        (
+            element
+            for element in page.get("elements") or []
+            if element.get("role") == "textbox"
+            and element.get("label") == "Add a comment"
+        ),
+        None,
+    )
+    if not box:
+        raise LauncherError("canonical Issue comment box unavailable")
+    relay.command("fill", {"elementId": box["id"], "text": body})
+    page = relay.command("getPage", {})
+    button = next(
+        (
+            element
+            for element in page.get("elements") or []
+            if element.get("role") == "button"
+            and element.get("text") == "Comment"
+        ),
+        None,
+    )
+    if not button:
+        raise LauncherError("canonical Issue Comment button unavailable")
+    relay.command("click", {"elementId": button["id"]})
+    relay.command("getPage", {})
+
+
+def wait_for_protocol_event(
+    token: str | None,
+    issue_no: int,
+    predicate,
+    *,
+    timeout: int = 15,
+) -> bool:
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if predicate(comments(token, issue_no)):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def run_worker(
@@ -518,10 +586,30 @@ def run_worker(
     relay.command("start", {})
     relay.command("goto", {"url": issue_url})
     relay.command("getPage", {})
+
+    claim_body = protocol_event_body(
+        "CLAIM",
+        agent_id=agent,
+        task=task,
+        summary="Claiming this task after canonical replay.",
+        next_action="Read the task and begin the authorized implementation.",
+        artifacts=[],
+    )
+    append_issue_comment(relay, issue_url, claim_body)
+    if not wait_for_protocol_event(
+        token,
+        issue_no,
+        lambda rows: canonical_claim_present(rows, task=task, agent_id=agent),
+    ):
+        raise LauncherError("canonical CLAIM was not verified after submission")
+
     opened = relay.command("newPage", {"url": GEMINI})
     gemini_index = int(opened.get("pageIndex", 1)) if isinstance(opened, dict) else 1
     time.sleep(2)
-    feedback = f"Browser Agent session {relay.session} is ready. Read the operating documents and canonical Issue."
+    feedback = (
+        f"Browser Agent session {relay.session} is ready and canonical CLAIM is verified. "
+        "Read the task, perform the work, verify artifacts, then return finish."
+    )
 
     try:
         for step in range(1, max_steps + 1):
@@ -542,18 +630,40 @@ def run_worker(
                 return 2
 
             if model_command.get("kind") == "finish":
-                if canonical_result_present(
-                    comments(token, issue_no),
-                    task=task,
+                summary = str(model_command.get("summary") or "").strip()
+                artifacts = model_command.get("artifacts")
+                if (
+                    not summary
+                    or not isinstance(artifacts, list)
+                    or not all(isinstance(item, str) and item.strip() for item in artifacts)
+                ):
+                    feedback = (
+                        "finish rejected: provide a non-empty summary and artifacts as a list of non-empty strings."
+                    )
+                    continue
+                result_body = protocol_event_body(
+                    "RESULT",
                     agent_id=agent,
+                    task=task,
+                    summary=summary,
+                    next_action=None,
+                    artifacts=[item.strip() for item in artifacts],
+                )
+                append_issue_comment(relay, issue_url, result_body)
+                if wait_for_protocol_event(
+                    token,
+                    issue_no,
+                    lambda rows: canonical_result_present(
+                        rows,
+                        task=task,
+                        agent_id=agent,
+                    ),
                 ):
                     print(
                         f"RESULT_OK task={task} agent_id={agent} session_id={relay.session}"
                     )
                     return 0
-                feedback = (
-                    "finish rejected: canonical CLAIM followed by RESULT for this run is not present; continue."
-                )
+                feedback = "RESULT submission was not verified on the canonical Issue; continue."
                 continue
 
             if model_command.get("kind") != "browser_action":
