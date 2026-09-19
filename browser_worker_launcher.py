@@ -263,8 +263,8 @@ def canonical_result_present(comments: list[dict[str, Any]], *, task: str, agent
 def reduce_observation(
     page: dict[str, Any],
     *,
-    max_text: int = 3000,
-    max_elements: int = 40,
+    max_text: int = 1800,
+    max_elements: int = 28,
 ) -> dict[str, Any]:
     keys = (
         "id",
@@ -470,26 +470,16 @@ def prompt(
     feedback: str,
     claimed: bool,
 ) -> str:
-    claim_state = "CLAIM VERIFIED FOR THIS RUN" if claimed else "CLAIM NOT YET VERIFIED"
-    return f"""You are the reasoning engine for an AI OS Browser Chat Worker.
-Run identity: {agent}
-Routed task pointer: {task}
-Canonical Issue: {issue}
-Worker protocol: {WORKER_DOC}
-Browser Agent instructions: {BROWSER_DOC}
-Canonical claim state: {claim_state}
-The task body is NOT injected here. Read it from the canonical Issue through Browser Agent observations.
-The launcher owns canonical CLAIM and RESULT serialization and submission. Do not write CLAIM/RESULT comments yourself.
-Work only on {task}. Use only current-generation element IDs. Never put secrets/cookies/credentials in public Issues.
-Navigate and verify the requested work. When the acceptance criteria are verified, return finish with a concise summary and immutable artifacts.
-Return exactly ONE strict JSON object and no prose. JSON strings must be valid JSON.
-Allowed shapes:
+    claim_state = "verified" if claimed else "not verified"
+    return f"""Control the Browser Agent for {task}. Canonical Issue: {issue}
+Run: {agent}. CLAIM: {claim_state}. The launcher writes CLAIM/RESULT; do not write those comments yourself.
+Read the task from the current observation, do only that task, use only current-generation element IDs, and never expose secrets.
+Return exactly one JSON object, no prose:
 {{"kind":"browser_action","action":"goto|getPage|fill|click|press|typeText|clickText|scroll|setViewport","args":{{...}},"reason":"..."}}
-{{"kind":"finish","summary":"verified completion summary","artifacts":["commit:abc123"],"reason":"Ready for launcher to append RESULT."}}
-{{"kind":"wait","reason":"..."}}
-Step: {step}
-Previous launcher feedback: {feedback}
-CURRENT WORK-TAB OBSERVATION:
+or {{"kind":"finish","summary":"what was verified","artifacts":["immutable artifact"],"reason":"done"}}
+or {{"kind":"wait","reason":"..."}}
+Step {step}. Feedback: {feedback}
+OBSERVATION:
 {json.dumps(observation, ensure_ascii=False, separators=(",", ":"))}"""
 
 
