@@ -16,11 +16,11 @@ https://github.com/GK-studio-JP/ai-bulletin-board/blob/main/protocol/GITHUB_PROT
 
 Browser Agent:
 
-https://github.com/kj2whvbzjn-hue/browser-agent
+https://github.com/GK-studio-JP/browser-agent
 
 Browser Agent operating instructions:
 
-https://github.com/kj2whvbzjn-hue/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md
+https://github.com/GK-studio-JP/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md
 
 GitHub Issue body plus creation-time protocol comments are the coordination source of truth. Chat history, Browser Agent relay state, generated projections, local notes, and model memory are not canonical state.
 
