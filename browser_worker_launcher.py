@@ -263,8 +263,8 @@ def canonical_result_present(comments: list[dict[str, Any]], *, task: str, agent
 def reduce_observation(
     page: dict[str, Any],
     *,
-    max_text: int = 8000,
-    max_elements: int = 100,
+    max_text: int = 3000,
+    max_elements: int = 40,
 ) -> dict[str, Any]:
     keys = (
         "id",
@@ -272,10 +272,8 @@ def reduce_observation(
         "text",
         "label",
         "value",
-        "disabled",
-        "editable",
     )
-    useful_roles = {"button", "textbox", "combobox", "checkbox", "radio", "link"}
+    useful_roles = {"button", "textbox", "combobox", "checkbox", "radio"}
     useful = [
         element
         for element in (page.get("elements") or [])
@@ -290,8 +288,8 @@ def reduce_observation(
         }
         for key in ("text", "label", "value"):
             value = compact.get(key)
-            if isinstance(value, str) and len(value) > 320:
-                compact[key] = value[:320]
+            if isinstance(value, str) and len(value) > 160:
+                compact[key] = value[:160]
         elements.append(compact)
     return {
         "url": page.get("url"),
