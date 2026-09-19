@@ -622,6 +622,7 @@ def prompt(
     feedback: str,
     claimed: bool,
     task_payload: dict[str, Any],
+    ledger: list[dict[str, Any]],
 ) -> str:
     claim_state = "verified" if claimed else "not verified"
     task_context = {
@@ -630,6 +631,20 @@ def prompt(
         "acceptance": task_payload.get("acceptance"),
         "context_refs": task_payload.get("context_refs"),
     }
+    evidence_urls: list[str] = []
+    evidence_shas: list[str] = []
+    for row in ledger:
+        url = str(row.get("url") or "")
+        if url and not url.startswith(GEMINI) and url.rstrip("/") != issue.rstrip("/"):
+            if url not in evidence_urls:
+                evidence_urls.append(url)
+        for sha in SHA40_RE.findall(url + "\n" + str(row.get("pageText") or "")):
+            if sha not in evidence_shas:
+                evidence_shas.append(sha)
+    evidence_context = {
+        "visited_urls": evidence_urls[-8:],
+        "observed_full_shas": evidence_shas[-8:],
+    }
     return f"""Control the Browser Agent for {task}. Canonical Issue: {issue}
 Run: {agent}. CLAIM: {claim_state}. The launcher writes CLAIM/RESULT; do not write those comments yourself.
 The task definition is supplied below on every turn. After CLAIM is verified, do not return to the canonical Issue merely to reread the task. Continue verification from the current task page.
@@ -637,6 +652,9 @@ If a GitHub file page shows a shortened commit SHA or an "Open commit details" c
 Do only the supplied task, use only current-generation element IDs, and never expose secrets.
 TASK:
 {json.dumps(task_context, ensure_ascii=False, separators=(",", ":"))}
+EVIDENCE ALREADY OBSERVED BY THE LAUNCHER:
+{json.dumps(evidence_context, ensure_ascii=False, separators=(",", ":"))}
+If the evidence above already proves every acceptance item, return finish now instead of revisiting pages.
 Return exactly one JSON object, no prose:
 {{"kind":"browser_action","action":"goto|getPage|fill|click|press|typeText|clickText|scroll|setViewport","args":{{...}},"reason":"..."}}
 For fill use args={{"elementId":"gN-eM","text":"..."}}. For click use args={{"elementId":"gN-eM"}}.
@@ -791,6 +809,7 @@ def run_worker(
                     feedback,
                     claimed,
                     task_payload,
+                    ledger,
                 ),
             )
 
