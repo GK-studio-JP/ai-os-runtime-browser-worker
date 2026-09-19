@@ -37,7 +37,7 @@ def _request(
     value: Any = None,
     headers: dict[str, str] | None = None,
 ) -> bytes:
-    h = {"User-Agent": "ai-os-browser-worker-launcher", **(headers or {})}
+    h = {"User-Agent": "ai-os-runtime-worker", **(headers or {})}
     if token:
         h["Authorization"] = f"Bearer {token}"
     body = None
