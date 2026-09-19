@@ -349,7 +349,6 @@ class Relay:
         self.session = session
         self.headers = {
             "apikey": key,
-            "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         }
 
