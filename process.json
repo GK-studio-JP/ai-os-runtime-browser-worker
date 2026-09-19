@@ -1,31 +1,31 @@
 {
   "schema": "ai-os-process:v1",
-  "id": "PROC-RUNTIME",
-  "name": "runtime",
-  "repository": "GK-studio-JP/ai-os-runtime",
+  "id": "PROC-RUNTIME-BROWSER-WORKER",
+  "name": "runtime-browser-worker",
+  "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
   "responsibility": [
-    "worker preflight",
-    "provider-neutral compute invocation",
-    "worker result normalization",
-    "postflight freshness gate",
-    "canonical event proposal generation"
+    "browser chat worker bootstrap",
+    "canonical bulletin-board task discovery",
+    "fresh canonical replay before claim and completion",
+    "browser-agent execution lifecycle",
+    "protocol-compliant progress and result reporting"
   ],
   "excludes": [
     "task scheduling policy",
     "capability grants",
-    "canonical persistence authority",
-    "subsystem implementation decisions"
+    "inventing task priority",
+    "treating chat or browser state as canonical",
+    "embedding the full task body as worker bootstrap"
   ],
   "consumes": [
-    "ai-os-worker-boot:v1",
-    "ai-os-context-capsule:v1",
-    "ai-os-kernel-dispatch-validation:v1",
-    "ai-bb:v1 replay"
+    "explicit scheduler routing or task Issue pointer",
+    "GK-studio-JP/ai-bulletin-board Issue/comment history",
+    "protocol/GITHUB_PROTOCOL.md",
+    "browser-agent/BROWSER_AGENT_INSTRUCTIONS.md"
   ],
   "provides": [
-    "ai-os-runtime-preflight:v1",
-    "ai-os-worker-invocation:v1",
-    "ai-os-runtime-outcome:v1",
-    "ai-os-runtime-gate:v1"
+    "CLAIM/HEARTBEAT/PROGRESS/HANDOFF/RELEASE/RESULT protocol events",
+    "immutable implementation artifact references",
+    "resumable browser-worker checkpoints"
   ]
 }
