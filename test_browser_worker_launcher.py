@@ -6,6 +6,7 @@ from pathlib import Path
 from browser_worker_launcher import (
     LauncherError,
     _protocol_payload,
+    _task_payload_from_issue,
     _validate_model_action,
     action_allowed_before_claim,
     canonical_claim_present,
@@ -16,6 +17,7 @@ from browser_worker_launcher import (
     plan_from_file,
     reduce_observation,
     resolve_plan,
+    validate_finish_evidence,
     validate_plan,
 )
 
@@ -192,6 +194,99 @@ class ProtocolTests(unittest.TestCase):
                 issue,
             )
         )
+
+
+
+class FinishEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        self.issue = "https://github.com/GK-studio-JP/ai-bulletin-board/issues/11"
+        self.sha = "a" * 40
+        self.file_url = (
+            "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/"
+            "blob/main/browser_worker_launcher.py"
+        )
+        self.task_payload = {
+            "process": "PROC-RUNTIME-BROWSER-WORKER",
+            "objective": (
+                "Verify the current main commit SHA and confirm "
+                "browser_worker_launcher.py exists."
+            ),
+            "acceptance": [
+                "RESULT artifacts include the current main commit SHA.",
+                "RESULT summary confirms browser_worker_launcher.py exists.",
+            ],
+        }
+
+    def test_rejects_finish_without_observed_task_evidence(self):
+        command = {
+            "kind": "finish",
+            "summary": "Confirmed browser_worker_launcher.py exists.",
+            "artifacts": [self.sha, self.file_url],
+            "evidence": [
+                {"kind": "extracted_fact", "value": self.sha},
+                {"kind": "visited_url", "value": self.file_url},
+            ],
+        }
+        ledger = [{"url": self.issue, "pageText": self.sha + " browser_worker_launcher.py"}]
+        rejection = validate_finish_evidence(
+            command, ledger, self.task_payload, self.issue
+        )
+        self.assertIn("no non-canonical task page", rejection)
+
+    def test_accepts_observed_sha_and_visited_file(self):
+        commit_url = (
+            "https://api.github.com/repos/GK-studio-JP/"
+            "ai-os-runtime-browser-worker/commits/main"
+        )
+        ledger = [
+            {"url": commit_url, "pageText": json.dumps({"sha": self.sha})},
+            {"url": self.file_url, "pageText": "browser_worker_launcher.py source"},
+        ]
+        command = {
+            "kind": "finish",
+            "summary": "Confirmed browser_worker_launcher.py exists on main.",
+            "artifacts": [self.sha, self.file_url],
+            "evidence": [
+                {"kind": "extracted_fact", "value": self.sha},
+                {"kind": "visited_url", "value": self.file_url},
+            ],
+        }
+        self.assertIsNone(
+            validate_finish_evidence(command, ledger, self.task_payload, self.issue)
+        )
+
+    def test_rejects_unobserved_artifact_sha(self):
+        observed_sha = "b" * 40
+        ledger = [
+            {
+                "url": "https://api.github.com/repos/GK-studio-JP/"
+                "ai-os-runtime-browser-worker/commits/main",
+                "pageText": json.dumps({"sha": observed_sha}),
+            },
+            {"url": self.file_url, "pageText": "browser_worker_launcher.py source"},
+        ]
+        command = {
+            "kind": "finish",
+            "summary": "Confirmed browser_worker_launcher.py exists on main.",
+            "artifacts": [self.sha, self.file_url],
+            "evidence": [
+                {"kind": "observed_text", "value": "browser_worker_launcher.py"},
+                {"kind": "visited_url", "value": self.file_url},
+            ],
+        }
+        rejection = validate_finish_evidence(
+            command, ledger, self.task_payload, self.issue
+        )
+        self.assertIn("commit SHA was not observed", rejection)
+
+    def test_task_payload_parses_canonical_task_marker(self):
+        body = (
+            "<!-- ai-os-task:v1 -->\n"
+            "```json\n"
+            '{"process":"PROC-RUNTIME-BROWSER-WORKER","objective":"verify"}\n'
+            "```\n"
+        )
+        self.assertEqual(_task_payload_from_issue(body)["objective"], "verify")
 
 
 class ObservationTests(unittest.TestCase):
