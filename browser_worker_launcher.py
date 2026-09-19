@@ -20,7 +20,7 @@ WORKFLOW = "browser-worker-plan.yml"
 ARTIFACT = "ai-os-browser-worker-dispatch"
 GEMINI = "https://gemini.google.com/app"
 WORKER_DOC = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/blob/main/WORKER.md"
-BROWSER_DOC = "https://github.com/kj2whvbzjn-hue/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md"
+BROWSER_DOC = "https://github.com/GK-studio-JP/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md"
 ALLOWED = {"goto", "getPage", "fill", "click", "press", "typeText", "clickText", "scroll", "setViewport"}
 MUTATING = {"fill", "click", "press", "typeText", "clickText"}
 
@@ -152,7 +152,7 @@ def validate_plan(plan: dict[str, Any]) -> dict[str, Any] | None:
         raise LauncherError("invalid dispatch boundary")
     task = str(dispatch.get("task") or "")
     issue_url = str(dispatch.get("source", {}).get("issue_url") or "")
-    if not re.fullmatch(r"#\d+", task):
+    if not re.fullmatch(r"#\\d+", task):
         raise LauncherError("dispatch task pointer is invalid")
     expected = f"https://github.com/{BOARD}/issues/{task[1:]}"
     if issue_url.rstrip("/") != expected:
@@ -177,7 +177,7 @@ def _balanced_json_objects(text: str) -> list[str]:
             if quoted:
                 if escaped:
                     escaped = False
-                elif ch == "\\":
+                elif ch == "\\\\":
                     escaped = True
                 elif ch == '"':
                     quoted = False
@@ -216,7 +216,7 @@ def extract_model_command(page_text: str) -> dict[str, Any]:
 def _protocol_payload(body: str) -> dict[str, Any] | None:
     if "<!-- ai-bb:v1 -->" not in body:
         return None
-    match = re.search(r"\`\`\`(?:json)?\s*(\{[\s\S]*?\})\s*\`\`\`", body)
+    match = re.search(r"\\`\\`\\`(?:json)?\\s*(\\{[\\s\\S]*?\\})\\s*\\`\\`\\`", body)
     raw = match.group(1) if match else None
     if not raw:
         objects = _balanced_json_objects(body[body.find("{") :]) if "{" in body else []
