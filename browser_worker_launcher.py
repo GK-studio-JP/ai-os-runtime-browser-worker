@@ -436,6 +436,7 @@ def _find(
 
 def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, Any]:
     relay.command("switchPage", {"index": gemini_index})
+    relay.command("goto", {"url": GEMINI})
     page = relay.command("getPage", {})
     if dismiss := _find(page, text="Not now"):
         relay.command("click", {"elementId": dismiss["id"]})
