@@ -621,11 +621,22 @@ def prompt(
     step: int,
     feedback: str,
     claimed: bool,
+    task_payload: dict[str, Any],
 ) -> str:
     claim_state = "verified" if claimed else "not verified"
+    task_context = {
+        "repository": task_payload.get("repository"),
+        "objective": task_payload.get("objective"),
+        "acceptance": task_payload.get("acceptance"),
+        "context_refs": task_payload.get("context_refs"),
+    }
     return f"""Control the Browser Agent for {task}. Canonical Issue: {issue}
 Run: {agent}. CLAIM: {claim_state}. The launcher writes CLAIM/RESULT; do not write those comments yourself.
-Read the task from the current observation, do only that task, use only current-generation element IDs, and never expose secrets.
+The task definition is supplied below on every turn. After CLAIM is verified, do not return to the canonical Issue merely to reread the task. Continue verification from the current task page.
+If a GitHub file page shows a shortened commit SHA or an "Open commit details" control and the task requires the full current commit SHA, open the commit details and observe the full 40-character SHA.
+Do only the supplied task, use only current-generation element IDs, and never expose secrets.
+TASK:
+{json.dumps(task_context, ensure_ascii=False, separators=(",", ":"))}
 Return exactly one JSON object, no prose:
 {{"kind":"browser_action","action":"goto|getPage|fill|click|press|typeText|clickText|scroll|setViewport","args":{{...}},"reason":"..."}}
 For fill use args={{"elementId":"gN-eM","text":"..."}}. For click use args={{"elementId":"gN-eM"}}.
@@ -771,7 +782,16 @@ def run_worker(
             model_command = ask_gemini(
                 relay,
                 gemini_index,
-                prompt(agent, task, issue_url, observation, step, feedback, claimed),
+                prompt(
+                    agent,
+                    task,
+                    issue_url,
+                    observation,
+                    step,
+                    feedback,
+                    claimed,
+                    task_payload,
+                ),
             )
 
             if model_command.get("kind") == "wait":
