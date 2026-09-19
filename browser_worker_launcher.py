@@ -306,9 +306,20 @@ def _validate_model_action(
     observation: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     action = str(command.get("action") or "")
-    args = command.get("args")
-    if action not in ALLOWED or not isinstance(args, dict):
+    raw_args = command.get("args")
+    if action not in ALLOWED or not isinstance(raw_args, dict):
         raise LauncherError(f"disallowed model action: {action!r}")
+
+    args = dict(raw_args)
+    if action in {"fill", "click"}:
+        if "elementId" not in args and "id" in args:
+            args["elementId"] = args["id"]
+        args.pop("id", None)
+    if action == "fill":
+        if "text" not in args and "value" in args:
+            args["text"] = args["value"]
+        args.pop("value", None)
+
     if action in {"fill", "click"}:
         element_id = str(args.get("elementId") or "")
         generation = observation.get("generation")
@@ -476,6 +487,7 @@ Run: {agent}. CLAIM: {claim_state}. The launcher writes CLAIM/RESULT; do not wri
 Read the task from the current observation, do only that task, use only current-generation element IDs, and never expose secrets.
 Return exactly one JSON object, no prose:
 {{"kind":"browser_action","action":"goto|getPage|fill|click|press|typeText|clickText|scroll|setViewport","args":{{...}},"reason":"..."}}
+For fill use args={{"elementId":"gN-eM","text":"..."}}. For click use args={{"elementId":"gN-eM"}}.
 or {{"kind":"finish","summary":"what was verified","artifacts":["immutable artifact"],"reason":"done"}}
 or {{"kind":"wait","reason":"..."}}
 Step {step}. Feedback: {feedback}
