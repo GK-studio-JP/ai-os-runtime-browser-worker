@@ -24,8 +24,8 @@ jobs:
     timeout-minutes: 15
     env:
       GITHUB_TOKEN: ${{ github.token }}
-      AI_OS_CONTEXT_SHA: 6b03b3e41995043e78faa1081d94973336aca86a
-      AI_OS_SCHEDULER_SHA: 7e1df073fda8de08254c3fa9cefa27ec1b2708f2
+      AI_OS_CONTEXT_SHA: 68a3cafc4c13fdd61cd22a06acf071c9a139764a
+      AI_OS_SCHEDULER_SHA: a4d1e394af4e140cd0486d6eb84611dc25753bf1
       AI_OS_KERNEL_SHA: 7b8040b0690838d025c2b336c544c274f1e1db40
     steps:
       - uses: actions/checkout@v4
