@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from browser_worker_launcher import (
@@ -187,6 +188,37 @@ class ElementRefreshTests(unittest.TestCase):
             )
 
 
+def canonical_comment(
+    comment_id: int,
+    created_at: datetime,
+    event_type: str,
+    agent_id: str,
+    *,
+    task: str = "#1",
+    updated_at: datetime | None = None,
+):
+    next_action = "continue" if event_type in {"CLAIM", "HEARTBEAT"} else None
+    payload = {
+        "type": event_type,
+        "agent_id": agent_id,
+        "task": task,
+        "idempotency_key": f"{agent_id}:{task}:{event_type.lower()}:{comment_id}",
+        "summary": f"{event_type.lower()} event",
+        "next_action": next_action,
+        "artifacts": [],
+    }
+
+    def stamp(value: datetime) -> str:
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    return {
+        "id": comment_id,
+        "created_at": stamp(created_at),
+        "updated_at": stamp(updated_at or created_at),
+        "body": "<!-- ai-bb:v1 -->\n" + json.dumps(payload),
+    }
+
+
 class ProtocolTests(unittest.TestCase):
     def test_protocol_payload_parses_fenced_json(self):
         body = """<!-- ai-bb:v1 -->
@@ -196,20 +228,101 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(_protocol_payload(body)["type"], "CLAIM")
 
     def test_claim_and_result_helpers(self):
-        comments = [
-            {
-                "body": '<!-- ai-bb:v1 -->\n```json\n{"type":"CLAIM","agent_id":"a","task":"#1"}\n```'
-            }
-        ]
-        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a"))
-        self.assertFalse(canonical_result_present(comments, task="#1", agent_id="a"))
-        comments.append(
-            {
-                "body": '<!-- ai-bb:v1 -->\n```json\n{"type":"RESULT","agent_id":"a","task":"#1"}\n```'
-            }
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        comments = [canonical_comment(1, t0, "CLAIM", "a")]
+        self.assertTrue(
+            canonical_claim_present(
+                comments,
+                task="#1",
+                agent_id="a",
+                now=t0 + timedelta(minutes=1),
+            )
         )
-        self.assertTrue(canonical_result_present(comments, task="#1", agent_id="a"))
-        self.assertTrue(canonical_task_completed(comments, task="#1"))
+        self.assertFalse(
+            canonical_result_present(
+                comments,
+                task="#1",
+                agent_id="a",
+                now=t0 + timedelta(minutes=1),
+            )
+        )
+        comments.append(canonical_comment(2, t0 + timedelta(minutes=2), "RESULT", "a"))
+        self.assertTrue(
+            canonical_result_present(
+                comments,
+                task="#1",
+                agent_id="a",
+                now=t0 + timedelta(minutes=3),
+            )
+        )
+        self.assertTrue(
+            canonical_task_completed(
+                comments,
+                task="#1",
+                now=t0 + timedelta(minutes=3),
+            )
+        )
+
+    def test_overlapping_claim_does_not_steal_live_lease(self):
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        comments = [
+            canonical_comment(1, t0, "CLAIM", "a"),
+            canonical_comment(2, t0 + timedelta(minutes=7), "CLAIM", "b"),
+        ]
+        now = t0 + timedelta(minutes=8)
+        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
+        self.assertFalse(canonical_claim_present(comments, task="#1", agent_id="b", now=now))
+        self.assertFalse(canonical_task_completed(comments, task="#1", now=now))
+
+    def test_expired_lease_allows_reclaim(self):
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        comments = [
+            canonical_comment(1, t0, "CLAIM", "a"),
+            canonical_comment(2, t0 + timedelta(minutes=16), "CLAIM", "b"),
+        ]
+        now = t0 + timedelta(minutes=17)
+        self.assertFalse(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
+        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="b", now=now))
+
+    def test_loser_result_does_not_complete_task(self):
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        comments = [
+            canonical_comment(1, t0, "CLAIM", "a"),
+            canonical_comment(2, t0 + timedelta(minutes=7), "CLAIM", "b"),
+            canonical_comment(3, t0 + timedelta(minutes=8), "RESULT", "b"),
+        ]
+        now = t0 + timedelta(minutes=9)
+        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
+        self.assertFalse(canonical_result_present(comments, task="#1", agent_id="b", now=now))
+        self.assertFalse(canonical_task_completed(comments, task="#1", now=now))
+
+    def test_heartbeat_extends_live_owner(self):
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        comments = [
+            canonical_comment(1, t0, "CLAIM", "a"),
+            canonical_comment(2, t0 + timedelta(minutes=10), "HEARTBEAT", "a"),
+        ]
+        now = t0 + timedelta(minutes=20)
+        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
+
+    def test_edited_protocol_history_fails_closed(self):
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        comments = [
+            canonical_comment(
+                1,
+                t0,
+                "CLAIM",
+                "a",
+                updated_at=t0 + timedelta(seconds=1),
+            )
+        ]
+        with self.assertRaisesRegex(LauncherError, "canonical history is unsafe"):
+            canonical_claim_present(
+                comments,
+                task="#1",
+                agent_id="a",
+                now=t0 + timedelta(minutes=1),
+            )
 
     def test_preclaim_gate_allows_only_comment_mutation(self):
         issue = "https://github.com/GK-studio-JP/ai-bulletin-board/issues/7"
