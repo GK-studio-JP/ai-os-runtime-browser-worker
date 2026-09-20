@@ -297,6 +297,27 @@ def _task_requirement_text(task_payload: dict[str, Any]) -> str:
     )
 
 
+def _requires_current_main_sha(task_payload: dict[str, Any]) -> bool:
+    requirement = _task_requirement_text(task_payload).lower()
+    return "current main" in requirement and ("sha" in requirement or "commit" in requirement)
+
+
+def _task_repository(task_payload: dict[str, Any]) -> str | None:
+    repository = str(task_payload.get("repository") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
+        return None
+    return repository
+
+
+def _main_head_evidence_url(repository: str) -> str:
+    return f"https://api.github.com/repos/{repository}/commits/main"
+
+
+def _top_level_sha(page_text: str) -> str | None:
+    match = re.match(r'\s*\{\s*"sha"\s*:\s*"([0-9a-f]{40})"', page_text)
+    return match.group(1) if match else None
+
+
 def _noncanonical_evidence_pages(
     ledger: list[dict[str, Any]], issue_url: str
 ) -> list[dict[str, Any]]:
@@ -369,21 +390,64 @@ def validate_finish_evidence(
     requirement_lower = requirement_text.lower()
     artifact_text = "\n".join(str(item).strip() for item in artifacts)
 
-    needs_sha = "commit sha" in requirement_lower or (
-        "current main" in requirement_lower and "sha" in requirement_lower
-    )
+    needs_current_main_sha = _requires_current_main_sha(task_payload)
+    needs_sha = "commit sha" in requirement_lower or needs_current_main_sha
     if needs_sha:
         shas = SHA40_RE.findall(artifact_text)
         if not shas:
-            return "finish rejected: acceptance requires the current main 40-character commit SHA in RESULT artifacts."
-        supported_shas = [sha for sha in shas if observed(sha)]
-        if not supported_shas:
-            return "finish rejected: artifact commit SHA was not observed on a non-canonical task page."
-        if not any(
-            any(sha in str(item.get("value") or "") for sha in supported_shas)
-            for item in evidence
-        ):
-            return "finish rejected: the observed commit SHA must also appear in structured evidence."
+            return "finish rejected: acceptance requires a 40-character commit SHA in RESULT artifacts."
+
+        if needs_current_main_sha:
+            repository = _task_repository(task_payload)
+            if not repository:
+                return "finish rejected: current-main verification requires task repository in owner/repo form."
+            expected_url = _main_head_evidence_url(repository)
+            main_rows = [
+                row
+                for row in pages
+                if str(row.get("url") or "").rstrip("/") == expected_url.rstrip("/")
+            ]
+            if not main_rows:
+                return (
+                    "finish rejected: current main SHA must be observed by visiting "
+                    f"{expected_url}; commit detail pages do not prove the current main HEAD."
+                )
+            main_sha = next(
+                (
+                    sha
+                    for row in reversed(main_rows)
+                    if (sha := _top_level_sha(str(row.get("pageText") or "")))
+                ),
+                None,
+            )
+            if not main_sha:
+                return (
+                    "finish rejected: the commits/main page did not expose a valid "
+                    'top-level 40-character "sha".'
+                )
+            if main_sha not in shas:
+                return (
+                    "finish rejected: RESULT artifact SHA does not match the current main HEAD "
+                    f"observed at {expected_url}."
+                )
+            if not any(
+                item.get("kind") == "extracted_fact"
+                and str(item.get("value") or "").strip() == main_sha
+                for item in evidence
+            ):
+                return (
+                    "finish rejected: structured evidence must include the exact current main "
+                    "HEAD SHA as extracted_fact."
+                )
+        else:
+            supported_shas = [sha for sha in shas if observed(sha)]
+            if not supported_shas:
+                return "finish rejected: artifact commit SHA was not observed on a non-canonical task page."
+            if not any(
+                any(sha in str(item.get("value") or "") for sha in supported_shas)
+                for item in evidence
+            ):
+                return "finish rejected: the observed commit SHA must also appear in structured evidence."
 
     filenames = sorted(set(re.findall(r"\b[A-Za-z0-9_.-]+\.py\b", requirement_text)))
     for filename in filenames:
@@ -675,11 +739,18 @@ def prompt(
     ledger: list[dict[str, Any]],
 ) -> str:
     claim_state = "verified" if claimed else "not verified"
+    repository = _task_repository(task_payload)
+    current_main_evidence_url = (
+        _main_head_evidence_url(repository)
+        if repository and _requires_current_main_sha(task_payload)
+        else None
+    )
     task_context = {
         "repository": task_payload.get("repository"),
         "objective": task_payload.get("objective"),
         "acceptance": task_payload.get("acceptance"),
         "context_refs": task_payload.get("context_refs"),
+        "current_main_evidence_url": current_main_evidence_url,
     }
     evidence_urls: list[str] = []
     evidence_shas: list[str] = []
@@ -698,7 +769,7 @@ def prompt(
     return f"""Control the Browser Agent for {task}. Canonical Issue: {issue}
 Run: {agent}. CLAIM: {claim_state}. The launcher writes CLAIM/RESULT; do not write those comments yourself.
 The task definition is supplied below on every turn. After CLAIM is verified, do not return to the canonical Issue merely to reread the task. Continue verification from the current task page.
-If a GitHub file page shows a shortened commit SHA or an "Open commit details" control and the task requires the full current commit SHA, open the commit details and observe the full 40-character SHA.
+If TASK.current_main_evidence_url is present, visit that exact URL and use its top-level "sha" as the current main HEAD. A /commit/<sha> detail page alone does not prove current main.
 Do only the supplied task, use only current-generation element IDs, and never expose secrets.
 TASK:
 {json.dumps(task_context, ensure_ascii=False, separators=(",", ":"))}
