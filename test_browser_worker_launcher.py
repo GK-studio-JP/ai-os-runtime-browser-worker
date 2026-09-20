@@ -16,6 +16,7 @@ from browser_worker_launcher import (
     issue_number_from_dispatch,
     plan_from_file,
     reduce_observation,
+    refresh_element_args,
     resolve_plan,
     validate_finish_evidence,
     validate_plan,
@@ -125,6 +126,65 @@ class ModelCommandTests(unittest.TestCase):
         )
         self.assertEqual(action, "click")
         self.assertEqual(args, {"elementId": "g4-e9"})
+
+
+class ElementRefreshTests(unittest.TestCase):
+    def test_remaps_click_to_fresh_generation_by_role_and_label(self):
+        observation = {
+            "generation": 2,
+            "elements": [
+                {
+                    "id": "g2-e137",
+                    "role": "button",
+                    "label": "Open commit details",
+                }
+            ],
+        }
+        fresh_page = {
+            "generation": 6,
+            "elements": [
+                {
+                    "id": "g6-e150",
+                    "role": "button",
+                    "label": "Open commit details",
+                }
+            ],
+        }
+        self.assertEqual(
+            refresh_element_args(
+                "click",
+                {"elementId": "g2-e137"},
+                observation,
+                fresh_page,
+            ),
+            {"elementId": "g6-e150"},
+        )
+
+    def test_rejects_ambiguous_fresh_element_match(self):
+        observation = {
+            "generation": 2,
+            "elements": [
+                {
+                    "id": "g2-e10",
+                    "role": "button",
+                    "label": "Continue",
+                }
+            ],
+        }
+        fresh_page = {
+            "generation": 3,
+            "elements": [
+                {"id": "g3-e10", "role": "button", "label": "Continue"},
+                {"id": "g3-e11", "role": "button", "label": "Continue"},
+            ],
+        }
+        with self.assertRaisesRegex(LauncherError, "2 matches"):
+            refresh_element_args(
+                "click",
+                {"elementId": "g2-e10"},
+                observation,
+                fresh_page,
+            )
 
 
 class ProtocolTests(unittest.TestCase):
