@@ -7,6 +7,7 @@ import uuid
 from typing import Any
 
 from ai_os_browser_worker.navigation_policy import LauncherError
+from ai_os_browser_worker.safety import make_tool_receipt
 
 
 def _request(
@@ -35,6 +36,12 @@ def _request(
 def _json(method: str, url: str, **kwargs: Any) -> Any:
     raw = _request(method, url, **kwargs)
     return json.loads(raw.decode()) if raw else None
+
+
+class RelayCommandError(LauncherError):
+    def __init__(self, message: str, receipt: dict[str, Any]):
+        super().__init__(message)
+        self.receipt = receipt
 
 
 class Relay:
@@ -102,3 +109,77 @@ class Relay:
                 raise LauncherError(f"Browser Agent {action} failed: {row.get('error')}")
             time.sleep(0.5)
         raise LauncherError(f"Browser Agent {action} timed out")
+
+    def command_with_receipt(
+        self,
+        action: str,
+        args: dict[str, Any] | None = None,
+        *,
+        run_id: str,
+        step: int,
+        timeout: int = 75,
+    ) -> tuple[Any, dict[str, Any]]:
+        """Execute one Browser Agent command and derive runtime-owned evidence."""
+
+        command_id = f"launcher-{uuid.uuid4().hex}"
+        command_args = args or {}
+        self.rest(
+            "POST",
+            "browser_relay_commands",
+            {
+                "session_id": self.session,
+                "command_id": command_id,
+                "action": action,
+                "args": command_args,
+            },
+            "return=representation",
+        )
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            rows = self.rest(
+                "GET",
+                f"browser_relay_commands?session_id=eq.{self.session}&command_id=eq.{command_id}&select=status,result,error&limit=1",
+            ) or []
+            row = rows[0] if rows else {}
+            if row.get("status") == "done":
+                result = row.get("result")
+                receipt = make_tool_receipt(
+                    run_id=run_id,
+                    step=step,
+                    action_id=command_id,
+                    tool=action,
+                    status="success",
+                    args=command_args,
+                    output=result,
+                )
+                return result, receipt
+            if row.get("status") == "error":
+                error = str(row.get("error") or "")
+                receipt = make_tool_receipt(
+                    run_id=run_id,
+                    step=step,
+                    action_id=command_id,
+                    tool=action,
+                    status="error",
+                    args=command_args,
+                    output={"error": error},
+                )
+                raise RelayCommandError(
+                    f"Browser Agent {action} failed: {error}",
+                    receipt,
+                )
+            time.sleep(0.5)
+
+        receipt = make_tool_receipt(
+            run_id=run_id,
+            step=step,
+            action_id=command_id,
+            tool=action,
+            status="error",
+            args=command_args,
+            output={"error": "timeout"},
+        )
+        raise RelayCommandError(
+            f"Browser Agent {action} timed out",
+            receipt,
+        )

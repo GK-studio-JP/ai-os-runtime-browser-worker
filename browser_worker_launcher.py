@@ -30,7 +30,13 @@ from ai_os_browser_worker.navigation_policy import (
     _validate_model_action,
     refresh_element_args,
 )
-from ai_os_browser_worker.relay import Relay
+from ai_os_browser_worker.relay import Relay, RelayCommandError
+from ai_os_browser_worker.safety import (
+    LoopGuard,
+    browser_state_fingerprint,
+    loop_guard_args,
+    receipt_fingerprint,
+)
 from ai_os_context.protocol import extract_task_envelope
 from ai_os_context.replay import replay as canonical_replay
 
@@ -143,6 +149,16 @@ def _task_payload_from_issue(body: str) -> dict[str, Any]:
     if isinstance(value, dict) and value.get("process") == PROCESS:
         return value
     return {}
+
+
+def _record_tool_receipt(
+    receipts: list[dict[str, Any]],
+    receipt: dict[str, Any],
+) -> None:
+    receipts.append(receipt)
+    if len(receipts) > 80:
+        del receipts[:-80]
+    print("TOOL_RECEIPT " + json.dumps(receipt, sort_keys=True))
 
 
 def _record_page_evidence(ledger: list[dict[str, Any]], page: dict[str, Any]) -> None:
@@ -485,6 +501,9 @@ def run_worker(
         return 0
 
     agent = f"browser-chat-gemini-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    loop_guard = LoopGuard()
+    loop_capped_reason: str | None = None
+    tool_receipts: list[dict[str, Any]] = []
     relay.ready()
     relay.command("start", {})
     relay.command("goto", {"url": issue_url})
@@ -603,6 +622,13 @@ def run_worker(
                 feedback = "invalid command kind; return one allowed command."
                 continue
 
+            if loop_capped_reason:
+                print(
+                    f"WAIT {task}: browser loop capped ({loop_capped_reason}); "
+                    "additional model browser action was not executed"
+                )
+                return 2
+
             try:
                 action, args = _validate_model_action(
                     model_command,
@@ -615,6 +641,7 @@ def run_worker(
                 continue
 
             relay.command("switchPage", {"index": 0})
+            guard_page = page
             if action == "click":
                 fresh_page = relay.command("getPage", {})
                 _record_page_evidence(ledger, fresh_page)
@@ -623,13 +650,61 @@ def run_worker(
                 except LauncherError as exc:
                     feedback = str(exc)
                     continue
-            relay.command(action, args)
+                guard_page = fresh_page
+
+            guarded_args = loop_guard_args(action, args, guard_page)
+            try:
+                _, receipt = relay.command_with_receipt(
+                    action,
+                    args,
+                    run_id=agent,
+                    step=step,
+                )
+            except RelayCommandError as exc:
+                _record_tool_receipt(tool_receipts, exc.receipt)
+                feedback = (
+                    f"{exc}; execution evidence receipt="
+                    f"{receipt_fingerprint(exc.receipt)}."
+                )
+                continue
+
+            _record_tool_receipt(tool_receipts, receipt)
             page = relay.command("getPage", {})
             _record_page_evidence(ledger, page)
-            feedback = (
-                f"Executed {action}; fresh generation={page.get('generation')} "
-                f"url={page.get('url')}."
+            decision = loop_guard.observe_tool_call(
+                agent,
+                action,
+                guarded_args,
+                state_fingerprint=browser_state_fingerprint(page),
             )
+            receipt_id = receipt_fingerprint(receipt)
+            if decision.stop:
+                loop_capped_reason = (
+                    f"{decision.reason_code} tool={action} "
+                    f"count={decision.count} threshold={decision.threshold}"
+                )
+                feedback = (
+                    f"Executed {action}; browser loop capped after this action: "
+                    f"{loop_capped_reason}; receipt={receipt_id}; "
+                    f"fresh generation={page.get('generation')} url={page.get('url')}. "
+                    "No further model browser actions will execute. "
+                    "Return finish if existing observed evidence satisfies acceptance; "
+                    "otherwise return wait."
+                )
+                continue
+            if decision.action == "warn":
+                feedback = (
+                    f"Executed {action}; loop warning={decision.reason_code} "
+                    f"count={decision.count}/{decision.threshold}; "
+                    f"receipt={receipt_id}; fresh generation={page.get('generation')} "
+                    f"url={page.get('url')}."
+                )
+            else:
+                feedback = (
+                    f"Executed {action}; receipt={receipt_id}; "
+                    f"fresh generation={page.get('generation')} "
+                    f"url={page.get('url')}."
+                )
 
         raise LauncherError(f"max worker steps exceeded ({max_steps})")
     finally:
