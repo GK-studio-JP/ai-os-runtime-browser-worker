@@ -5,10 +5,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from ai_os_browser_worker.navigation_policy import (
+    _validate_model_action,
+    refresh_element_args,
+)
 from browser_worker_launcher import (
     LauncherError,
     _task_payload_from_issue,
-    _validate_model_action,
     canonical_claim_present,
     canonical_result_present,
     canonical_task_completed,
@@ -17,7 +20,6 @@ from browser_worker_launcher import (
     issue_number_from_dispatch,
     plan_from_file,
     reduce_observation,
-    refresh_element_args,
     resolve_plan,
     validate_finish_evidence,
     validate_plan,
