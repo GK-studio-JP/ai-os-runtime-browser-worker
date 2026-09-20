@@ -35,11 +35,11 @@ Canonical board protocol:
 
 Browser Agent:
 
-`https://github.com/kj2whvbzjn-hue/browser-agent`
+`https://github.com/GK-studio-JP/browser-agent`
 
 Browser Agent operating instructions:
 
-`https://github.com/kj2whvbzjn-hue/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md`
+`https://github.com/GK-studio-JP/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md`
 
 Chat history, Browser Agent relay state, generated projections, and model memory are working context only. They are not canonical coordination state.
 
@@ -114,18 +114,16 @@ Keeping that baseline in the clone makes it possible to compare the two executio
 
 ## Integration status
 
-Implemented in this fork:
+Implemented and wired into the control plane:
 
-- Browser Chat Worker protocol;
-- minimal Chat bootstrap;
-- dedicated process metadata;
-- canonical board pull/claim/progress/result rules;
-- Browser Agent lifecycle and privacy rules.
+- Browser Chat Worker protocol and minimal Chat bootstrap;
+- dedicated `PROC-RUNTIME-BROWSER-WORKER` process metadata;
+- Kernel registration for `PROC-RUNTIME-BROWSER-WORKER`;
+- dedicated Scheduler routing via `.github/workflows/browser-worker-plan.yml`;
+- canonical replay ownership checks for CLAIM / HEARTBEAT / RESULT;
+- automatic lease renewal with verified canonical HEARTBEAT events;
+- Browser Agent lifecycle and privacy rules;
+- launcher preflight and production Browser Worker execution through `GK-studio-JP/browser-agent`;
+- end-to-end runs that verify routed task ownership, browser evidence, and canonical RESULT completion.
 
-Still required for full control-plane integration:
-
-- register `PROC-RUNTIME-BROWSER-WORKER` in the Kernel process registry;
-- add an explicit Scheduler routing target for the browser-worker process;
-- add an end-to-end smoke path that launches a Browser Chat Worker from a routed task and verifies the resulting canonical protocol events.
-
-Until those integration steps are complete, this repository defines the Worker contract but is not yet an automatically dispatched production Worker.
+Current hardening work is focused on reproducible provenance and dependency pinning across the control plane, plus exercising HEARTBEAT renewal in a deliberately long-running production task.
