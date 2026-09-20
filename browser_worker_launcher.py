@@ -502,6 +502,7 @@ def run_worker(
 
     agent = f"browser-chat-gemini-{int(time.time())}-{uuid.uuid4().hex[:8]}"
     loop_guard = LoopGuard()
+    loop_capped_reason: str | None = None
     tool_receipts: list[dict[str, Any]] = []
     relay.ready()
     relay.command("start", {})
@@ -621,6 +622,13 @@ def run_worker(
                 feedback = "invalid command kind; return one allowed command."
                 continue
 
+            if loop_capped_reason:
+                print(
+                    f"WAIT {task}: browser loop capped ({loop_capped_reason}); "
+                    "additional model browser action was not executed"
+                )
+                return 2
+
             try:
                 action, args = _validate_model_action(
                     model_command,
@@ -671,12 +679,19 @@ def run_worker(
             )
             receipt_id = receipt_fingerprint(receipt)
             if decision.stop:
-                raise LauncherError(
-                    "browser loop capped: "
+                loop_capped_reason = (
                     f"{decision.reason_code} tool={action} "
-                    f"count={decision.count} threshold={decision.threshold}; "
-                    f"receipt={receipt_id}"
+                    f"count={decision.count} threshold={decision.threshold}"
                 )
+                feedback = (
+                    f"Executed {action}; browser loop capped after this action: "
+                    f"{loop_capped_reason}; receipt={receipt_id}; "
+                    f"fresh generation={page.get('generation')} url={page.get('url')}. "
+                    "No further model browser actions will execute. "
+                    "Return finish if existing observed evidence satisfies acceptance; "
+                    "otherwise return wait."
+                )
+                continue
             if decision.action == "warn":
                 feedback = (
                     f"Executed {action}; loop warning={decision.reason_code} "
