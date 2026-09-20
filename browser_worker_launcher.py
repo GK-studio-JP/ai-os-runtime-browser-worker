@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import time
+import urllib.parse
 import urllib.request
 import uuid
 import zipfile
@@ -25,8 +26,8 @@ ARTIFACT = "ai-os-browser-worker-dispatch"
 GEMINI = "https://gemini.google.com/app"
 WORKER_DOC = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/blob/main/WORKER.md"
 BROWSER_DOC = "https://github.com/GK-studio-JP/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md"
-ALLOWED = {"goto", "getPage", "fill", "click", "press", "typeText", "clickText", "scroll", "setViewport"}
-MUTATING = {"fill", "click", "press", "typeText", "clickText"}
+ALLOWED = {"goto", "getPage", "click", "scroll", "setViewport"}
+MUTATING: set[str] = set()
 EVIDENCE_KINDS = {"visited_url", "observed_text", "immutable_artifact", "extracted_fact"}
 SHA40_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])")
 
@@ -313,6 +314,55 @@ def _main_head_evidence_url(repository: str) -> str:
     return f"https://api.github.com/repos/{repository}/commits/main"
 
 
+def _allowed_navigation_url(
+    url: str,
+    *,
+    task_payload: dict[str, Any],
+    issue_url: str,
+) -> str:
+    value = str(url or "").strip()
+    parsed = urllib.parse.urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise LauncherError("browser navigation URL has an invalid port") from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or port not in (None, 443)
+    ):
+        raise LauncherError("browser navigation requires an HTTPS task-scoped URL")
+
+    if issue_url and value.rstrip("/") == issue_url.rstrip("/"):
+        return value
+
+    repository = _task_repository(task_payload)
+    if not repository:
+        raise LauncherError("browser navigation requires task repository in owner/repo form")
+    owner, repo = repository.split("/", 1)
+    host = parsed.hostname.lower()
+    path = parsed.path or "/"
+
+    allowed = False
+    if host == "github.com":
+        prefix = f"/{owner}/{repo}"
+        allowed = path == prefix or path.startswith(prefix + "/")
+    elif host == "api.github.com":
+        prefix = f"/repos/{owner}/{repo}"
+        allowed = path == prefix or path.startswith(prefix + "/")
+    elif host == "raw.githubusercontent.com":
+        prefix = f"/{owner}/{repo}/"
+        allowed = path.startswith(prefix)
+
+    if not allowed:
+        raise LauncherError(
+            f"browser navigation outside task repository is denied: {value}"
+        )
+    return value
+
+
 def _top_level_sha(page_text: str) -> str | None:
     match = re.match(r'\s*\{\s*"sha"\s*:\s*"([0-9a-f]{40})"', page_text)
     return match.group(1) if match else None
@@ -491,6 +541,10 @@ def reduce_observation(
             for key in keys
             if element.get(key) not in (None, "", [], {})
         }
+        attributes = element.get("attributes") if isinstance(element.get("attributes"), dict) else {}
+        href = attributes.get("href")
+        if isinstance(href, str) and href:
+            compact["href"] = href
         for key in ("text", "label", "value"):
             value = compact.get(key)
             if isinstance(value, str) and len(value) > 160:
@@ -509,6 +563,9 @@ def reduce_observation(
 def _validate_model_action(
     command: dict[str, Any],
     observation: dict[str, Any],
+    *,
+    task_payload: dict[str, Any] | None = None,
+    issue_url: str = "",
 ) -> tuple[str, dict[str, Any]]:
     action = str(command.get("action") or "")
     raw_args = command.get("args")
@@ -516,20 +573,40 @@ def _validate_model_action(
         raise LauncherError(f"disallowed model action: {action!r}")
 
     args = dict(raw_args)
-    if action in {"fill", "click"}:
+    payload = task_payload or {}
+
+    if action == "goto":
+        args["url"] = _allowed_navigation_url(
+            str(args.get("url") or ""),
+            task_payload=payload,
+            issue_url=issue_url,
+        )
+        return action, args
+
+    if action == "click":
         if "elementId" not in args and "id" in args:
             args["elementId"] = args["id"]
         args.pop("id", None)
-    if action == "fill":
-        if "text" not in args and "value" in args:
-            args["text"] = args["value"]
-        args.pop("value", None)
-
-    if action in {"fill", "click"}:
         element_id = str(args.get("elementId") or "")
         generation = observation.get("generation")
         if generation is None or not element_id.startswith(f"g{generation}-"):
             raise LauncherError(f"stale elementId {element_id!r} for generation {generation!r}")
+        element = _element_for_action(observation, args)
+        if not element or element.get("role") != "link":
+            raise LauncherError(
+                "model click is limited to current-generation navigation links"
+            )
+        href = str(element.get("href") or "")
+        if not href:
+            raise LauncherError("model click navigation link is missing href")
+        target = urllib.parse.urljoin(str(observation.get("url") or ""), href)
+        _allowed_navigation_url(
+            target,
+            task_payload=payload,
+            issue_url=issue_url,
+        )
+        return action, args
+
     return action, args
 
 
@@ -777,8 +854,8 @@ EVIDENCE ALREADY OBSERVED BY THE LAUNCHER:
 {json.dumps(evidence_context, ensure_ascii=False, separators=(",", ":"))}
 If the evidence above already proves every acceptance item, return finish now instead of revisiting pages.
 Return exactly one JSON object, no prose:
-{{"kind":"browser_action","action":"goto|getPage|fill|click|press|typeText|clickText|scroll|setViewport","args":{{...}},"reason":"..."}}
-For fill use args={{"elementId":"gN-eM","text":"..."}}. For click use args={{"elementId":"gN-eM"}}.
+{{"kind":"browser_action","action":"goto|getPage|click|scroll|setViewport","args":{{...}},"reason":"..."}}
+Model-driven browser mutation is disabled pending Kernel capability receipts. click is allowed only for current-generation navigation links inside the task repository. For click use args={{"elementId":"gN-eM"}}.
 or {{"kind":"finish","summary":"what was verified","artifacts":["immutable artifact"],"evidence":[{{"kind":"visited_url","value":"https://..."}},{{"kind":"extracted_fact","value":"observed fact"}}],"reason":"done"}}
 Evidence must come from pages actually observed in the task browser, not from the Issue text or Gemini. If the task asks for a current commit SHA, put the full 40-character SHA in artifacts and evidence. If it asks whether a file exists, actually visit that file before finish.
 or {{"kind":"wait","reason":"..."}}
@@ -1084,7 +1161,12 @@ def run_worker(
                 continue
 
             try:
-                action, args = _validate_model_action(model_command, observation)
+                action, args = _validate_model_action(
+                    model_command,
+                    observation,
+                    task_payload=task_payload,
+                    issue_url=issue_url,
+                )
             except LauncherError as exc:
                 feedback = str(exc)
                 continue
