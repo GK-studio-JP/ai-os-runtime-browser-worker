@@ -239,7 +239,7 @@ def _canonical_replay_state(
     task: str,
     now: datetime | None = None,
 ) -> Any:
-    if not re.fullmatch(r"#\\d+", task):
+    if not re.fullmatch(r"#\d+", task):
         raise LauncherError("canonical task pointer is invalid")
     state = canonical_replay({"number": int(task[1:])}, comments, now=now)
     if not state.history_safe:
