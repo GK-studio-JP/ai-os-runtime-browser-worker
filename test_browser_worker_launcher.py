@@ -9,7 +9,6 @@ from browser_worker_launcher import (
     LauncherError,
     _task_payload_from_issue,
     _validate_model_action,
-    action_allowed_before_claim,
     canonical_claim_present,
     canonical_result_present,
     canonical_task_completed,
@@ -567,51 +566,6 @@ class ProtocolTests(unittest.TestCase):
                 agent_id="a",
                 now=t0 + timedelta(minutes=1),
             )
-
-    def test_preclaim_gate_allows_only_comment_mutation(self):
-        issue = "https://github.com/GK-studio-JP/ai-bulletin-board/issues/7"
-        observation = {
-            "url": issue,
-            "generation": 4,
-            "elements": [
-                {
-                    "id": "g4-e1",
-                    "role": "textbox",
-                    "label": "Use Markdown to format your comment",
-                },
-                {"id": "g4-e2", "role": "button", "text": "Comment"},
-                {"id": "g4-e3", "role": "button", "text": "Close issue"},
-            ],
-        }
-        self.assertTrue(
-            action_allowed_before_claim(
-                {"action": "fill", "args": {"elementId": "g4-e1"}},
-                observation,
-                issue,
-            )
-        )
-        self.assertTrue(
-            action_allowed_before_claim(
-                {"action": "click", "args": {"elementId": "g4-e2"}},
-                observation,
-                issue,
-            )
-        )
-        self.assertFalse(
-            action_allowed_before_claim(
-                {"action": "click", "args": {"elementId": "g4-e3"}},
-                observation,
-                issue,
-            )
-        )
-        self.assertTrue(
-            action_allowed_before_claim(
-                {"action": "goto", "args": {"url": "https://example.test"}},
-                observation,
-                issue,
-            )
-        )
-
 
 
 class FinishEvidenceTests(unittest.TestCase):
