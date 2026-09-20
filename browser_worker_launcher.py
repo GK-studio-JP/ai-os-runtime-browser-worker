@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ai_os_context.protocol import extract_task_envelope
 from ai_os_context.replay import replay as canonical_replay
 
 PROCESS = "PROC-RUNTIME-BROWSER-WORKER"
@@ -218,21 +219,6 @@ def extract_model_command(page_text: str) -> dict[str, Any]:
     return rows[-1]
 
 
-def _protocol_payload(body: str) -> dict[str, Any] | None:
-    if "<!-- ai-bb:v1 -->" not in body:
-        return None
-    match = re.search(r"\`\`\`(?:json)?\s*(\{[\s\S]*?\})\s*\`\`\`", body)
-    raw = match.group(1) if match else None
-    if not raw:
-        objects = _balanced_json_objects(body[body.find("{") :]) if "{" in body else []
-        raw = objects[0] if objects else None
-    try:
-        obj = json.loads(raw) if raw else None
-    except json.JSONDecodeError:
-        return None
-    return obj if isinstance(obj, dict) else None
-
-
 def _canonical_replay_state(
     comments: list[dict[str, Any]],
     *,
@@ -284,16 +270,9 @@ def canonical_result_present(
 
 
 def _task_payload_from_issue(body: str) -> dict[str, Any]:
-    if "<!-- ai-os-task:v1 -->" not in body:
-        return {}
-    tail = body.split("<!-- ai-os-task:v1 -->", 1)[1]
-    for raw in _balanced_json_objects(tail):
-        try:
-            obj = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict) and obj.get("process") == PROCESS:
-            return obj
+    value = extract_task_envelope(body)
+    if isinstance(value, dict) and value.get("process") == PROCESS:
+        return value
     return {}
 
 
@@ -809,8 +788,17 @@ OBSERVATION:
 
 
 def comments(token: str | None, issue: int) -> list[dict[str, Any]]:
-    data = github(f"/repos/{BOARD}/issues/{issue}/comments?per_page=100", token=token)
-    return data if isinstance(data, list) else []
+    out: list[dict[str, Any]] = []
+    for page in range(1, 101):
+        data = github(
+            f"/repos/{BOARD}/issues/{issue}/comments?per_page=100&page={page}",
+            token=token,
+        )
+        rows = data if isinstance(data, list) else []
+        out.extend(rows)
+        if len(rows) < 100:
+            return out
+    raise LauncherError("canonical comment history exceeded 100 pages")
 
 
 def protocol_event_body(
