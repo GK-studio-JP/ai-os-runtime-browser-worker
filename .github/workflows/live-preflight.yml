@@ -24,20 +24,28 @@ jobs:
     timeout-minutes: 15
     env:
       GITHUB_TOKEN: ${{ github.token }}
+      AI_OS_CONTEXT_SHA: 6b03b3e41995043e78faa1081d94973336aca86a
+      AI_OS_SCHEDULER_SHA: 7e1df073fda8de08254c3fa9cefa27ec1b2708f2
+      AI_OS_KERNEL_SHA: 7b8040b0690838d025c2b336c544c274f1e1db40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
         with:
           repository: GK-studio-JP/ai-os-context
+          ref: ${{ env.AI_OS_CONTEXT_SHA }}
           path: context
       - uses: actions/checkout@v4
         with:
           repository: GK-studio-JP/ai-os-scheduler
+          ref: ${{ env.AI_OS_SCHEDULER_SHA }}
           path: scheduler
       - uses: actions/checkout@v4
         with:
           repository: GK-studio-JP/ai-os-kernel
+          ref: ${{ env.AI_OS_KERNEL_SHA }}
           path: kernel
+      - name: Record provenance
+        run: echo "AI_OS_PROVENANCE runtime_sha=${GITHUB_SHA} context_sha=${AI_OS_CONTEXT_SHA} scheduler_sha=${AI_OS_SCHEDULER_SHA} kernel_sha=${AI_OS_KERNEL_SHA}"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
