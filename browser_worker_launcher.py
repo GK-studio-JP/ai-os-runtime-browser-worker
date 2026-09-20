@@ -27,7 +27,6 @@ GEMINI = "https://gemini.google.com/app"
 WORKER_DOC = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/blob/main/WORKER.md"
 BROWSER_DOC = "https://github.com/GK-studio-JP/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md"
 ALLOWED = {"goto", "getPage", "click", "scroll", "setViewport"}
-MUTATING: set[str] = set()
 EVIDENCE_KINDS = {"visited_url", "observed_text", "immutable_artifact", "extracted_fact"}
 SHA40_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])")
 
@@ -623,7 +622,7 @@ def refresh_element_args(
     observation: dict[str, Any],
     fresh_page: dict[str, Any],
 ) -> dict[str, Any]:
-    if action not in {"click", "fill"}:
+    if action != "click":
         return dict(args)
 
     source = _element_for_action(observation, args)
@@ -665,32 +664,6 @@ def refresh_element_args(
     refreshed = dict(args)
     refreshed["elementId"] = candidates[0]["id"]
     return refreshed
-
-
-def action_allowed_before_claim(
-    command: dict[str, Any],
-    observation: dict[str, Any],
-    issue_url: str,
-) -> bool:
-    action = str(command.get("action") or "")
-    args = command.get("args") if isinstance(command.get("args"), dict) else {}
-    if action in {"goto", "getPage", "scroll", "setViewport"}:
-        return True
-    if str(observation.get("url") or "").rstrip("/") != issue_url.rstrip("/"):
-        return False
-    element = _element_for_action(observation, args)
-    if not element:
-        return False
-    if action in {"fill", "typeText"}:
-        label = str(element.get("label") or "")
-        return (
-            label == "Use Markdown to format your comment"
-            or label == "Markdown value"
-            or "format your comment" in label
-        )
-    if action == "click":
-        return element.get("role") == "button" and str(element.get("text") or "") == "Comment"
-    return False
 
 
 class Relay:
@@ -1171,19 +1144,8 @@ def run_worker(
                 feedback = str(exc)
                 continue
 
-            if action in MUTATING:
-                ensure_canonical_lease(
-                    token=token,
-                    issue_no=issue_no,
-                    issue_url=issue_url,
-                    relay=relay,
-                    task=task,
-                    agent_id=agent,
-                    phase="browser mutation",
-                )
-
             relay.command("switchPage", {"index": 0})
-            if action in {"click", "fill"}:
+            if action == "click":
                 fresh_page = relay.command("getPage", {})
                 _record_page_evidence(ledger, fresh_page)
                 try:
