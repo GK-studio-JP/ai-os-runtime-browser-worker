@@ -267,6 +267,7 @@ class FinishEvidenceTests(unittest.TestCase):
         )
         self.task_payload = {
             "process": "PROC-RUNTIME-BROWSER-WORKER",
+            "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
             "objective": (
                 "Verify the current main commit SHA and confirm "
                 "browser_worker_launcher.py exists."
