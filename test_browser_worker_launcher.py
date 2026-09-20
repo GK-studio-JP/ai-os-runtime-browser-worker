@@ -87,6 +87,21 @@ class PlanTests(unittest.TestCase):
 
 
 class ModelCommandTests(unittest.TestCase):
+    def setUp(self):
+        self.issue = "https://github.com/GK-studio-JP/ai-bulletin-board/issues/7"
+        self.payload = {
+            "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
+        }
+        self.repo_url = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker"
+
+    def validate(self, command, observation):
+        return _validate_model_action(
+            command,
+            observation,
+            task_payload=self.payload,
+            issue_url=self.issue,
+        )
+
     def test_extract_model_command_uses_last_matching_json(self):
         text = (
             'Prompt example {"kind":"wait","reason":"example"}\n'
@@ -96,38 +111,137 @@ class ModelCommandTests(unittest.TestCase):
         self.assertEqual(command["kind"], "browser_action")
         self.assertEqual(command["action"], "goto")
 
-    def test_element_action_requires_current_generation(self):
-        observation = {"generation": 4}
+    def test_navigation_link_requires_current_generation(self):
+        observation = {
+            "generation": 4,
+            "url": self.repo_url,
+            "elements": [
+                {
+                    "id": "g4-e8",
+                    "role": "link",
+                    "label": "commit",
+                    "href": "/GK-studio-JP/ai-os-runtime-browser-worker/commit/" + "a" * 40,
+                }
+            ],
+        }
         command = {"action": "click", "args": {"elementId": "g4-e8"}}
-        self.assertEqual(_validate_model_action(command, observation)[0], "click")
+        self.assertEqual(self.validate(command, observation)[0], "click")
         command["args"]["elementId"] = "g3-e8"
         with self.assertRaises(LauncherError):
-            _validate_model_action(command, observation)
+            self.validate(command, observation)
 
     def test_disallows_control_plane_tab_actions(self):
         with self.assertRaises(LauncherError):
-            _validate_model_action(
+            self.validate(
                 {"action": "switchPage", "args": {"index": 1}},
-                {"generation": 1},
+                {"generation": 1, "url": self.repo_url, "elements": []},
             )
 
+    def test_disallows_model_mutation_actions(self):
+        observation = {
+            "generation": 4,
+            "url": self.repo_url,
+            "elements": [{"id": "g4-e8", "role": "textbox", "label": "Edit"}],
+        }
+        commands = [
+            {"action": "fill", "args": {"elementId": "g4-e8", "text": "x"}},
+            {"action": "press", "args": {"key": "Enter"}},
+            {"action": "typeText", "args": {"text": "x"}},
+            {"action": "clickText", "args": {"text": "Delete"}},
+        ]
+        for command in commands:
+            with self.subTest(action=command["action"]):
+                with self.assertRaisesRegex(LauncherError, "disallowed model action"):
+                    self.validate(command, observation)
 
-    def test_normalizes_fill_and_click_alias_args(self):
-        observation = {"generation": 4}
-
-        action, args = _validate_model_action(
-            {"action": "fill", "args": {"id": "g4-e8", "value": "hello"}},
+    def test_goto_allows_https_task_repository_and_canonical_issue(self):
+        observation = {"generation": 4, "url": self.repo_url, "elements": []}
+        task_api = (
+            "https://api.github.com/repos/GK-studio-JP/"
+            "ai-os-runtime-browser-worker/commits/main"
+        )
+        action, args = self.validate(
+            {"action": "goto", "args": {"url": task_api}},
             observation,
         )
-        self.assertEqual(action, "fill")
-        self.assertEqual(args, {"elementId": "g4-e8", "text": "hello"})
+        self.assertEqual(action, "goto")
+        self.assertEqual(args["url"], task_api)
 
-        action, args = _validate_model_action(
+        action, args = self.validate(
+            {"action": "goto", "args": {"url": self.issue}},
+            observation,
+        )
+        self.assertEqual(action, "goto")
+        self.assertEqual(args["url"], self.issue)
+
+    def test_goto_rejects_non_https_private_and_cross_repository_urls(self):
+        observation = {"generation": 4, "url": self.repo_url, "elements": []}
+        denied = [
+            "file:///etc/passwd",
+            "http://github.com/GK-studio-JP/ai-os-runtime-browser-worker",
+            "https://127.0.0.1/",
+            "https://localhost/",
+            "https://github.com/other/repo",
+            "https://api.github.com/repos/other/repo/commits/main",
+            "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker-evil",
+        ]
+        for url in denied:
+            with self.subTest(url=url):
+                with self.assertRaises(LauncherError):
+                    self.validate(
+                        {"action": "goto", "args": {"url": url}},
+                        observation,
+                    )
+
+    def test_click_normalizes_alias_and_requires_navigation_link(self):
+        observation = {
+            "generation": 4,
+            "url": self.repo_url,
+            "elements": [
+                {
+                    "id": "g4-e9",
+                    "role": "link",
+                    "label": "source",
+                    "href": "/GK-studio-JP/ai-os-runtime-browser-worker/blob/main/WORKER.md",
+                },
+                {
+                    "id": "g4-e10",
+                    "role": "button",
+                    "label": "Delete repository",
+                },
+            ],
+        }
+        action, args = self.validate(
             {"action": "click", "args": {"id": "g4-e9"}},
             observation,
         )
         self.assertEqual(action, "click")
         self.assertEqual(args, {"elementId": "g4-e9"})
+
+        with self.assertRaisesRegex(LauncherError, "navigation links"):
+            self.validate(
+                {"action": "click", "args": {"elementId": "g4-e10"}},
+                observation,
+            )
+
+    def test_click_rejects_cross_repository_link(self):
+        observation = {
+            "generation": 4,
+            "url": self.repo_url,
+            "elements": [
+                {
+                    "id": "g4-e11",
+                    "role": "link",
+                    "label": "outside",
+                    "href": "https://github.com/other/repo",
+                }
+            ],
+        }
+        with self.assertRaisesRegex(LauncherError, "outside task repository"):
+            self.validate(
+                {"action": "click", "args": {"elementId": "g4-e11"}},
+                observation,
+            )
 
 
 class ElementRefreshTests(unittest.TestCase):
@@ -639,6 +753,28 @@ class FinishEvidenceTests(unittest.TestCase):
 
 
 class ObservationTests(unittest.TestCase):
+    def test_reduce_observation_preserves_link_href_for_policy(self):
+        page = {
+            "url": "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker",
+            "generation": 8,
+            "pageText": "source",
+            "elements": [
+                {
+                    "id": "g8-e1",
+                    "role": "link",
+                    "text": "WORKER.md",
+                    "attributes": {
+                        "href": "/GK-studio-JP/ai-os-runtime-browser-worker/blob/main/WORKER.md"
+                    },
+                }
+            ],
+        }
+        reduced = reduce_observation(page)
+        self.assertEqual(
+            reduced["elements"][0]["href"],
+            "/GK-studio-JP/ai-os-runtime-browser-worker/blob/main/WORKER.md",
+        )
+
     def test_reduce_observation_bounds_text_and_elements(self):
         page = {
             "url": "https://example.test",
