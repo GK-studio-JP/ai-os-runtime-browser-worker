@@ -823,8 +823,14 @@ def protocol_event_body(
     return "<!-- ai-bb:v1 -->\n" + json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def append_issue_comment(relay: Relay, issue_url: str, body: str) -> None:
-    relay.command("switchPage", {"index": 0})
+def append_issue_comment(
+    relay: Relay,
+    issue_url: str,
+    body: str,
+    *,
+    page_index: int = 0,
+) -> None:
+    relay.command("switchPage", {"index": page_index})
     relay.command("goto", {"url": issue_url})
     page = relay.command("getPage", {})
     box = next(
@@ -899,7 +905,19 @@ def ensure_canonical_lease(
         artifacts=[],
         idempotency_key=heartbeat_key,
     )
-    append_issue_comment(relay, issue_url, heartbeat_body)
+    opened = relay.command("newPage", {"url": issue_url})
+    heartbeat_page_index = (
+        int(opened.get("pageIndex", 0)) if isinstance(opened, dict) else 0
+    )
+    try:
+        append_issue_comment(
+            relay,
+            issue_url,
+            heartbeat_body,
+            page_index=heartbeat_page_index,
+        )
+    finally:
+        relay.command("switchPage", {"index": 0})
 
     def renewed(rows: list[dict[str, Any]]) -> bool:
         refreshed = _canonical_replay_state(rows, task=task, now=now)
