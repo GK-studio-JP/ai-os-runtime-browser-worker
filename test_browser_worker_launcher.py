@@ -337,7 +337,52 @@ class FinishEvidenceTests(unittest.TestCase):
         rejection = validate_finish_evidence(
             command, ledger, self.task_payload, self.issue
         )
-        self.assertIn("commit SHA was not observed", rejection)
+        self.assertIn("does not match the current main HEAD", rejection)
+
+    def test_rejects_old_commit_detail_for_current_main(self):
+        commit_url = (
+            "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/commit/"
+            + self.sha
+        )
+        ledger = [
+            {"url": commit_url, "pageText": self.sha},
+            {"url": self.file_url, "pageText": "browser_worker_launcher.py source"},
+        ]
+        command = {
+            "kind": "finish",
+            "summary": "Confirmed browser_worker_launcher.py exists on main.",
+            "artifacts": [self.sha, self.file_url],
+            "evidence": [
+                {"kind": "extracted_fact", "value": self.sha},
+                {"kind": "visited_url", "value": self.file_url},
+            ],
+        }
+        rejection = validate_finish_evidence(
+            command, ledger, self.task_payload, self.issue
+        )
+        self.assertIn("/commits/main", rejection)
+        self.assertIn("do not prove the current main HEAD", rejection)
+
+    def test_rejects_missing_file_visit(self):
+        commit_url = (
+            "https://api.github.com/repos/GK-studio-JP/"
+            "ai-os-runtime-browser-worker/commits/main"
+        )
+        ledger = [
+            {"url": commit_url, "pageText": json.dumps({"sha": self.sha})},
+        ]
+        command = {
+            "kind": "finish",
+            "summary": "Confirmed browser_worker_launcher.py exists on main.",
+            "artifacts": [self.sha, self.file_url],
+            "evidence": [
+                {"kind": "extracted_fact", "value": self.sha},
+            ],
+        }
+        rejection = validate_finish_evidence(
+            command, ledger, self.task_payload, self.issue
+        )
+        self.assertIn("file existence was not verified", rejection)
 
     def test_task_payload_parses_canonical_task_marker(self):
         body = (
