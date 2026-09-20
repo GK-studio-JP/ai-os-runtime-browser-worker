@@ -10,8 +10,11 @@ import time
 import urllib.request
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from ai_os_context.replay import replay as canonical_replay
 
 PROCESS = "PROC-RUNTIME-BROWSER-WORKER"
 BOARD = "GK-studio-JP/ai-bulletin-board"
@@ -230,36 +233,54 @@ def _protocol_payload(body: str) -> dict[str, Any] | None:
     return obj if isinstance(obj, dict) else None
 
 
-def canonical_task_completed(comments: list[dict[str, Any]], *, task: str) -> bool:
-    return any(
-        (payload := _protocol_payload(str(comment.get("body") or "")))
-        and payload.get("task") == task
-        and payload.get("type") == "RESULT"
-        for comment in comments
+def _canonical_replay_state(
+    comments: list[dict[str, Any]],
+    *,
+    task: str,
+    now: datetime | None = None,
+) -> Any:
+    if not re.fullmatch(r"#\\d+", task):
+        raise LauncherError("canonical task pointer is invalid")
+    state = canonical_replay({"number": int(task[1:])}, comments, now=now)
+    if not state.history_safe:
+        reason = state.history_unsafe_reason or "unknown history defect"
+        raise LauncherError(f"canonical history is unsafe: {reason}")
+    return state
+
+
+def canonical_task_completed(
+    comments: list[dict[str, Any]],
+    *,
+    task: str,
+    now: datetime | None = None,
+) -> bool:
+    return _canonical_replay_state(comments, task=task, now=now).state == "completed"
+
+
+def canonical_claim_present(
+    comments: list[dict[str, Any]],
+    *,
+    task: str,
+    agent_id: str,
+    now: datetime | None = None,
+) -> bool:
+    state = _canonical_replay_state(comments, task=task, now=now)
+    return state.state == "claimed" and state.owner == agent_id
+
+
+def canonical_result_present(
+    comments: list[dict[str, Any]],
+    *,
+    task: str,
+    agent_id: str,
+    now: datetime | None = None,
+) -> bool:
+    state = _canonical_replay_state(comments, task=task, now=now)
+    return (
+        state.state == "completed"
+        and state.latest_result is not None
+        and state.latest_result.agent_id == agent_id
     )
-
-
-def canonical_claim_present(comments: list[dict[str, Any]], *, task: str, agent_id: str) -> bool:
-    return any(
-        (payload := _protocol_payload(str(comment.get("body") or "")))
-        and payload.get("task") == task
-        and payload.get("agent_id") == agent_id
-        and payload.get("type") == "CLAIM"
-        for comment in comments
-    )
-
-
-def canonical_result_present(comments: list[dict[str, Any]], *, task: str, agent_id: str) -> bool:
-    claimed = False
-    for comment in comments:
-        payload = _protocol_payload(str(comment.get("body") or ""))
-        if not payload or payload.get("task") != task or payload.get("agent_id") != agent_id:
-            continue
-        if payload.get("type") == "CLAIM":
-            claimed = True
-        if payload.get("type") == "RESULT" and claimed:
-            return True
-    return False
 
 
 def _task_payload_from_issue(body: str) -> dict[str, Any]:
@@ -913,6 +934,8 @@ def run_worker(
         for step in range(1, max_steps + 1):
             current_comments = comments(token, issue_no)
             claimed = canonical_claim_present(current_comments, task=task, agent_id=agent)
+            if not claimed:
+                raise LauncherError("canonical lease ownership was lost before task work")
 
             relay.command("switchPage", {"index": 0})
             page = relay.command("getPage", {})
@@ -948,6 +971,12 @@ def run_worker(
                 if rejection:
                     feedback = rejection
                     continue
+                if not canonical_claim_present(
+                    comments(token, issue_no),
+                    task=task,
+                    agent_id=agent,
+                ):
+                    raise LauncherError("canonical lease ownership was lost before RESULT")
                 summary = str(model_command.get("summary") or "").strip()
                 artifacts = model_command.get("artifacts")
                 result_body = protocol_event_body(
@@ -985,13 +1014,12 @@ def run_worker(
                 feedback = str(exc)
                 continue
 
-            if not claimed and action in MUTATING:
-                if not action_allowed_before_claim(model_command, observation, issue_url):
-                    feedback = (
-                        "mutation rejected before canonical CLAIM verification. "
-                        "Only the canonical Issue comment box and Comment button may mutate before CLAIM."
-                    )
-                    continue
+            if action in MUTATING and not canonical_claim_present(
+                comments(token, issue_no),
+                task=task,
+                agent_id=agent,
+            ):
+                raise LauncherError("canonical lease ownership was lost before browser mutation")
 
             relay.command("switchPage", {"index": 0})
             if action in {"click", "fill"}:
