@@ -476,6 +476,56 @@ def _element_for_action(observation: dict[str, Any], args: dict[str, Any]) -> di
     return next((e for e in observation.get("elements") or [] if e.get("id") == element_id), None)
 
 
+def refresh_element_args(
+    action: str,
+    args: dict[str, Any],
+    observation: dict[str, Any],
+    fresh_page: dict[str, Any],
+) -> dict[str, Any]:
+    if action not in {"click", "fill"}:
+        return dict(args)
+
+    source = _element_for_action(observation, args)
+    if not source:
+        raise LauncherError(
+            f"cannot refresh elementId {args.get('elementId')!r}: source element missing"
+        )
+
+    fresh_generation = fresh_page.get("generation")
+    if fresh_generation is None:
+        raise LauncherError("cannot refresh elementId without a fresh page generation")
+
+    source_role = source.get("role")
+    source_label = str(source.get("label") or "")
+    source_text = str(source.get("text") or "")
+    candidates = []
+    for element in fresh_page.get("elements") or []:
+        element_id = str(element.get("id") or "")
+        if not element_id.startswith(f"g{fresh_generation}-"):
+            continue
+        if source_role and element.get("role") != source_role:
+            continue
+        if source_label:
+            if str(element.get("label") or "") != source_label:
+                continue
+        elif source_text:
+            if str(element.get("text") or "") != source_text:
+                continue
+        else:
+            continue
+        candidates.append(element)
+
+    if len(candidates) != 1:
+        descriptor = source_label or source_text or str(source.get("id") or "")
+        raise LauncherError(
+            f"cannot refresh elementId for {descriptor!r}: {len(candidates)} matches on fresh page"
+        )
+
+    refreshed = dict(args)
+    refreshed["elementId"] = candidates[0]["id"]
+    return refreshed
+
+
 def action_allowed_before_claim(
     command: dict[str, Any],
     observation: dict[str, Any],
@@ -873,6 +923,14 @@ def run_worker(
                     continue
 
             relay.command("switchPage", {"index": 0})
+            if action in {"click", "fill"}:
+                fresh_page = relay.command("getPage", {})
+                _record_page_evidence(ledger, fresh_page)
+                try:
+                    args = refresh_element_args(action, args, observation, fresh_page)
+                except LauncherError as exc:
+                    feedback = str(exc)
+                    continue
             relay.command(action, args)
             page = relay.command("getPage", {})
             _record_page_evidence(ledger, page)
