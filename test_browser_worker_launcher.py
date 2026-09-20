@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from browser_worker_launcher import (
     LauncherError,
@@ -12,6 +13,7 @@ from browser_worker_launcher import (
     canonical_claim_present,
     canonical_result_present,
     canonical_task_completed,
+    ensure_canonical_lease,
     extract_model_command,
     issue_number_from_dispatch,
     plan_from_file,
@@ -296,6 +298,142 @@ class ProtocolTests(unittest.TestCase):
         ]
         now = t0 + timedelta(minutes=20)
         self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
+
+    def test_ensure_canonical_lease_renews_expiring_owner_without_replacing_task_page(self):
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        before = [canonical_comment(1, t0, "CLAIM", "a")]
+        after = [
+            canonical_comment(1, t0, "CLAIM", "a"),
+            canonical_comment(2, t0 + timedelta(minutes=11), "HEARTBEAT", "a"),
+        ]
+        now = t0 + timedelta(minutes=11)
+
+        class FakeRelay:
+            def __init__(self):
+                self.calls = []
+
+            def command(self, action, args):
+                self.calls.append((action, args))
+                if action == "newPage":
+                    return {"pageIndex": 3}
+                return {}
+
+        relay = FakeRelay()
+        with (
+            patch("browser_worker_launcher.comments", side_effect=[before, after]),
+            patch("browser_worker_launcher.append_issue_comment") as append_mock,
+            patch(
+                "browser_worker_launcher.wait_for_protocol_event",
+                side_effect=lambda token, issue_no, predicate: predicate(after),
+            ),
+        ):
+            state = ensure_canonical_lease(
+                token="token",
+                issue_no=1,
+                issue_url="https://github.com/GK-studio-JP/ai-bulletin-board/issues/1",
+                relay=relay,
+                task="#1",
+                agent_id="a",
+                phase="task work",
+                now=now,
+            )
+
+        self.assertEqual(state.owner, "a")
+        self.assertEqual(state.lease_status, "active")
+        self.assertEqual(
+            relay.calls,
+            [
+                (
+                    "newPage",
+                    {"url": "https://github.com/GK-studio-JP/ai-bulletin-board/issues/1"},
+                ),
+                ("switchPage", {"index": 0}),
+            ],
+        )
+        self.assertEqual(append_mock.call_args.kwargs["page_index"], 3)
+        body = append_mock.call_args.args[2]
+        payload = json.loads(body.split("\n", 1)[1])
+        self.assertEqual(payload["type"], "HEARTBEAT")
+        self.assertEqual(payload["agent_id"], "a")
+        self.assertTrue(payload["idempotency_key"].startswith("a:#1:heartbeat:"))
+        self.assertNotEqual(payload["idempotency_key"], "a:#1:heartbeat")
+
+    def test_ensure_canonical_lease_skips_heartbeat_when_active(self):
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        rows = [canonical_comment(1, t0, "CLAIM", "a")]
+        with (
+            patch("browser_worker_launcher.comments", return_value=rows),
+            patch("browser_worker_launcher.append_issue_comment") as append_mock,
+        ):
+            state = ensure_canonical_lease(
+                token=None,
+                issue_no=1,
+                issue_url="https://github.com/GK-studio-JP/ai-bulletin-board/issues/1",
+                relay=object(),
+                task="#1",
+                agent_id="a",
+                phase="task work",
+                now=t0 + timedelta(minutes=1),
+            )
+        self.assertEqual(state.lease_status, "active")
+        append_mock.assert_not_called()
+
+    def test_ensure_canonical_lease_fails_for_non_owner(self):
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        rows = [
+            canonical_comment(1, t0, "CLAIM", "a"),
+            canonical_comment(2, t0 + timedelta(minutes=7), "CLAIM", "b"),
+        ]
+        with (
+            patch("browser_worker_launcher.comments", return_value=rows),
+            patch("browser_worker_launcher.append_issue_comment") as append_mock,
+        ):
+            with self.assertRaisesRegex(LauncherError, "ownership was lost"):
+                ensure_canonical_lease(
+                    token=None,
+                    issue_no=1,
+                    issue_url="https://github.com/GK-studio-JP/ai-bulletin-board/issues/1",
+                    relay=object(),
+                    task="#1",
+                    agent_id="b",
+                    phase="task work",
+                    now=t0 + timedelta(minutes=8),
+                )
+        append_mock.assert_not_called()
+
+    def test_ensure_canonical_lease_fails_closed_when_heartbeat_is_not_verified(self):
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        before = [canonical_comment(1, t0, "CLAIM", "a")]
+
+        class FakeRelay:
+            def __init__(self):
+                self.calls = []
+
+            def command(self, action, args):
+                self.calls.append((action, args))
+                if action == "newPage":
+                    return {"pageIndex": 4}
+                return {}
+
+        relay = FakeRelay()
+        with (
+            patch("browser_worker_launcher.comments", return_value=before),
+            patch("browser_worker_launcher.append_issue_comment") as append_mock,
+            patch("browser_worker_launcher.wait_for_protocol_event", return_value=False),
+        ):
+            with self.assertRaisesRegex(LauncherError, "HEARTBEAT was not verified"):
+                ensure_canonical_lease(
+                    token=None,
+                    issue_no=1,
+                    issue_url="https://github.com/GK-studio-JP/ai-bulletin-board/issues/1",
+                    relay=relay,
+                    task="#1",
+                    agent_id="a",
+                    phase="RESULT submission",
+                    now=t0 + timedelta(minutes=11),
+                )
+        self.assertEqual(append_mock.call_args.kwargs["page_index"], 4)
+        self.assertEqual(relay.calls[-1], ("switchPage", {"index": 0}))
 
     def test_edited_protocol_history_fails_closed(self):
         t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
