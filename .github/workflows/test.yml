@@ -15,4 +15,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install pinned canonical replay
+        env:
+          AI_OS_CONTEXT_SHA: 6b03b3e41995043e78faa1081d94973336aca86a
+        run: python -m pip install --disable-pip-version-check "git+https://github.com/GK-studio-JP/ai-os-context.git@${AI_OS_CONTEXT_SHA}"
       - run: python -m unittest -v test_runtime.py test_browser_worker_launcher.py
