@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from ai_os_browser_worker.evidence import validate_finish_evidence
 from ai_os_browser_worker.navigation_policy import (
     _validate_model_action,
     refresh_element_args,
@@ -21,7 +22,6 @@ from browser_worker_launcher import (
     plan_from_file,
     reduce_observation,
     resolve_plan,
-    validate_finish_evidence,
     validate_plan,
 )
 
