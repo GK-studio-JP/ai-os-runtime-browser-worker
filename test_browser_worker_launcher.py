@@ -6,6 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ai_os_browser_worker.evidence import validate_finish_evidence
+from ai_os_browser_worker.dispatch import (
+)
 from ai_os_browser_worker.navigation_policy import (
     _validate_model_action,
     refresh_element_args,
