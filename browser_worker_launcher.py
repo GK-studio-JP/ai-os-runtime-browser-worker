@@ -528,7 +528,7 @@ def reduce_observation(
         "label",
         "value",
     )
-    useful_roles = {"button", "textbox", "combobox", "checkbox", "radio"}
+    useful_roles = {"button", "link", "textbox", "combobox", "checkbox", "radio"}
     useful = [
         element
         for element in (page.get("elements") or [])
