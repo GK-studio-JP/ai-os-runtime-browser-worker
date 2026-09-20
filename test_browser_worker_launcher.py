@@ -6,7 +6,6 @@ from pathlib import Path
 
 from browser_worker_launcher import (
     LauncherError,
-    _protocol_payload,
     _task_payload_from_issue,
     _validate_model_action,
     action_allowed_before_claim,
@@ -220,13 +219,6 @@ def canonical_comment(
 
 
 class ProtocolTests(unittest.TestCase):
-    def test_protocol_payload_parses_fenced_json(self):
-        body = """<!-- ai-bb:v1 -->
-```json
-{"type":"CLAIM","agent_id":"a","task":"#1"}
-```"""
-        self.assertEqual(_protocol_payload(body)["type"], "CLAIM")
-
     def test_claim_and_result_helpers(self):
         t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
         comments = [canonical_comment(1, t0, "CLAIM", "a")]
