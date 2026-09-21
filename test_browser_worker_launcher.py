@@ -25,6 +25,7 @@ from browser_worker_launcher import (
     canonical_task_completed,
     ensure_canonical_lease,
     extract_model_command,
+    protocol_event_body,
     reduce_observation,
 )
 
@@ -343,11 +344,25 @@ def canonical_comment(
         "id": comment_id,
         "created_at": stamp(created_at),
         "updated_at": stamp(updated_at or created_at),
-        "body": "<!-- ai-bb:v1 -->\n" + json.dumps(payload),
+        "body": "<!-- ai-bb:v1 -->\n```json\n" + json.dumps(payload) + "\n```",
+        "user": {"login": "repo-owner"},
+        "author_association": "OWNER",
     }
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_protocol_event_body_uses_fenced_json(self):
+        body = protocol_event_body(
+            "CLAIM",
+            agent_id="a",
+            task="#1",
+            summary="claimed",
+            next_action="continue",
+            artifacts=[],
+        )
+        self.assertIn("<!-- ai-bb:v1 -->\n```json\n", body)
+        self.assertTrue(body.endswith("\n```"))
+
     def test_claim_and_result_helpers(self):
         t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
         comments = [canonical_comment(1, t0, "CLAIM", "a")]
