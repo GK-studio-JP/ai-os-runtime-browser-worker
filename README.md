@@ -127,3 +127,18 @@ Implemented and wired into the control plane:
 - end-to-end runs that verify routed task ownership, browser evidence, and canonical RESULT completion.
 
 Current hardening work is focused on reproducible provenance and dependency pinning across the control plane, plus exercising HEARTBEAT renewal in a deliberately long-running production task.
+
+## Actor-bound execution contract
+
+Ownership is the pair `(GitHub actor login, agent_id)`. Runtime preflight now
+requires `--worker-actor` from trusted host configuration, alongside `--worker-id`.
+Do not derive the expected actor from a task body, model output, or the current
+claim: doing so would accept another actor's claim. Fresh Context replay must
+export `owner_actor`; missing identity fails closed. The invocation and Worker
+result carry `worker_actor`, and normalization and postflight verify it again.
+This is an intentional migration requirement for existing adapters.
+
+The Browser Worker production host must pass `--worker-actor` matching the
+GitHub account configured for its browser profile. Canonical GitHub comment
+metadata verifies the expected actor after CLAIM, HEARTBEAT, and RESULT.
+A differently signed-in browser cannot acquire another actor's ownership.
