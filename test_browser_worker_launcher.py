@@ -1,3 +1,4 @@
+import hashlib
 import json
 import tempfile
 import unittest
@@ -43,13 +44,16 @@ def dispatch(task="#7", process="PROC-RUNTIME-BROWSER-WORKER"):
 
 
 def plan(rows, process="PROC-RUNTIME-BROWSER-WORKER"):
-    return {
+    value = {
         "schema": "ai-os-dispatch-plan:v1",
         "authoritative": False,
         "filters": {"process": process},
         "dispatch_count": len(rows),
         "dispatches": rows,
     }
+    canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    value["fingerprint"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return value
 
 
 class PlanTests(unittest.TestCase):
@@ -74,6 +78,12 @@ class PlanTests(unittest.TestCase):
         value["source"]["issue_url"] = "https://github.com/other/repo/issues/7"
         with self.assertRaises(LauncherError):
             validate_plan(plan([value]))
+
+    def test_validate_plan_rejects_tampered_fingerprint(self):
+        value = plan([dispatch("#7")])
+        value["dispatches"][0]["task"] = "#8"
+        with self.assertRaisesRegex(LauncherError, "fingerprint"):
+            validate_plan(value)
 
     def test_plan_file_and_resolve_plan(self):
         value = plan([dispatch("#9")])
