@@ -330,6 +330,8 @@ def canonical_comment(
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
     return {
+        "user": {"login": "repo-owner"},
+        "author_association": "OWNER",
         "id": comment_id,
         "created_at": stamp(created_at),
         "updated_at": stamp(updated_at or created_at),
@@ -345,7 +347,7 @@ class ProtocolTests(unittest.TestCase):
             canonical_claim_present(
                 comments,
                 task="#1",
-                agent_id="a",
+                agent_id="a", actor_login="repo-owner",
                 now=t0 + timedelta(minutes=1),
             )
         )
@@ -353,7 +355,7 @@ class ProtocolTests(unittest.TestCase):
             canonical_result_present(
                 comments,
                 task="#1",
-                agent_id="a",
+                agent_id="a", actor_login="repo-owner",
                 now=t0 + timedelta(minutes=1),
             )
         )
@@ -362,7 +364,7 @@ class ProtocolTests(unittest.TestCase):
             canonical_result_present(
                 comments,
                 task="#1",
-                agent_id="a",
+                agent_id="a", actor_login="repo-owner",
                 now=t0 + timedelta(minutes=3),
             )
         )
@@ -381,8 +383,8 @@ class ProtocolTests(unittest.TestCase):
             canonical_comment(2, t0 + timedelta(minutes=7), "CLAIM", "b"),
         ]
         now = t0 + timedelta(minutes=8)
-        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
-        self.assertFalse(canonical_claim_present(comments, task="#1", agent_id="b", now=now))
+        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", actor_login="repo-owner", now=now))
+        self.assertFalse(canonical_claim_present(comments, task="#1", agent_id="b", actor_login="repo-owner", now=now))
         self.assertFalse(canonical_task_completed(comments, task="#1", now=now))
 
     def test_expired_lease_allows_reclaim(self):
@@ -392,8 +394,8 @@ class ProtocolTests(unittest.TestCase):
             canonical_comment(2, t0 + timedelta(minutes=16), "CLAIM", "b"),
         ]
         now = t0 + timedelta(minutes=17)
-        self.assertFalse(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
-        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="b", now=now))
+        self.assertFalse(canonical_claim_present(comments, task="#1", agent_id="a", actor_login="repo-owner", now=now))
+        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="b", actor_login="repo-owner", now=now))
 
     def test_loser_result_does_not_complete_task(self):
         t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
@@ -403,8 +405,8 @@ class ProtocolTests(unittest.TestCase):
             canonical_comment(3, t0 + timedelta(minutes=8), "RESULT", "b"),
         ]
         now = t0 + timedelta(minutes=9)
-        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
-        self.assertFalse(canonical_result_present(comments, task="#1", agent_id="b", now=now))
+        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", actor_login="repo-owner", now=now))
+        self.assertFalse(canonical_result_present(comments, task="#1", agent_id="b", actor_login="repo-owner", now=now))
         self.assertFalse(canonical_task_completed(comments, task="#1", now=now))
 
     def test_heartbeat_extends_live_owner(self):
@@ -414,7 +416,7 @@ class ProtocolTests(unittest.TestCase):
             canonical_comment(2, t0 + timedelta(minutes=10), "HEARTBEAT", "a"),
         ]
         now = t0 + timedelta(minutes=20)
-        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
+        self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", actor_login="repo-owner", now=now))
 
     def test_ensure_canonical_lease_renews_expiring_owner_without_replacing_task_page(self):
         t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
@@ -450,7 +452,7 @@ class ProtocolTests(unittest.TestCase):
                 issue_url="https://github.com/GK-studio-JP/ai-bulletin-board/issues/1",
                 relay=relay,
                 task="#1",
-                agent_id="a",
+                agent_id="a", actor_login="repo-owner",
                 phase="task work",
                 now=now,
             )
@@ -488,7 +490,7 @@ class ProtocolTests(unittest.TestCase):
                 issue_url="https://github.com/GK-studio-JP/ai-bulletin-board/issues/1",
                 relay=object(),
                 task="#1",
-                agent_id="a",
+                agent_id="a", actor_login="repo-owner",
                 phase="task work",
                 now=t0 + timedelta(minutes=1),
             )
@@ -512,7 +514,7 @@ class ProtocolTests(unittest.TestCase):
                     issue_url="https://github.com/GK-studio-JP/ai-bulletin-board/issues/1",
                     relay=object(),
                     task="#1",
-                    agent_id="b",
+                    agent_id="b", actor_login="repo-owner",
                     phase="task work",
                     now=t0 + timedelta(minutes=8),
                 )
@@ -545,7 +547,7 @@ class ProtocolTests(unittest.TestCase):
                     issue_url="https://github.com/GK-studio-JP/ai-bulletin-board/issues/1",
                     relay=relay,
                     task="#1",
-                    agent_id="a",
+                    agent_id="a", actor_login="repo-owner",
                     phase="RESULT submission",
                     now=t0 + timedelta(minutes=11),
                 )
@@ -567,7 +569,7 @@ class ProtocolTests(unittest.TestCase):
             canonical_claim_present(
                 comments,
                 task="#1",
-                agent_id="a",
+                agent_id="a", actor_login="repo-owner",
                 now=t0 + timedelta(minutes=1),
             )
 
