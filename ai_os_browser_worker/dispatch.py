@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -128,12 +129,20 @@ def resolve_plan(
     return plan_from_run(run_id, token)
 
 
+def _plan_fingerprint(plan: dict[str, Any]) -> str:
+    material = {key: value for key, value in plan.items() if key != "fingerprint"}
+    canonical = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def validate_plan(plan: dict[str, Any]) -> dict[str, Any] | None:
     if (
         plan.get("schema") != "ai-os-dispatch-plan:v1"
         or plan.get("authoritative") is not False
     ):
         raise LauncherError("invalid dispatch plan boundary")
+    if plan.get("fingerprint") != _plan_fingerprint(plan):
+        raise LauncherError("dispatch plan fingerprint mismatch")
     if plan.get("filters", {}).get("process") != PROCESS:
         raise LauncherError("dispatch plan process mismatch")
     rows = plan.get("dispatches")
