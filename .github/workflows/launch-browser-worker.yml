@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 10
     env:
       PLAN_URL: https://github.com/GK-studio-JP/ai-os-scheduler/releases/download/browser-worker-dispatch/browser-worker-plan.json
-      AI_OS_CONTEXT_SHA: 6b03b3e41995043e78faa1081d94973336aca86a
+      AI_OS_CONTEXT_SHA: cc5fc109f73c938fbf976f34ea777ce52c791777
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
