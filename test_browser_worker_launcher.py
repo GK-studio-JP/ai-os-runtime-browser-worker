@@ -494,7 +494,7 @@ class ProtocolTests(unittest.TestCase):
         )
         self.assertEqual(append_mock.call_args.kwargs["page_index"], 3)
         body = append_mock.call_args.args[2]
-        payload = json.loads(body.split("```json\\n", 1)[1].rsplit("\\n```", 1)[0])
+        payload = json.loads(body.split("```json\n", 1)[1].rsplit("\n```", 1)[0])
         self.assertEqual(payload["type"], "HEARTBEAT")
         self.assertEqual(payload["agent_id"], "a")
         self.assertTrue(payload["idempotency_key"].startswith("a:#1:heartbeat:"))
