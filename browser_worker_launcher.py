@@ -37,8 +37,12 @@ from ai_os_browser_worker.safety import (
     loop_guard_args,
     receipt_fingerprint,
 )
+from ai_os_context import REPLAY_CONTRACT
 from ai_os_context.protocol import extract_task_envelope
 from ai_os_context.replay import replay as canonical_replay
+
+if REPLAY_CONTRACT != "actor-binding-v1":
+    raise RuntimeError("Browser Worker requires Context actor-binding-v1")
 
 GEMINI = "https://gemini.google.com/app"
 WORKER_DOC = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/blob/main/WORKER.md"
@@ -123,10 +127,11 @@ def canonical_claim_present(
     *,
     task: str,
     agent_id: str,
+    actor_login: str,
     now: datetime | None = None,
 ) -> bool:
     state = _canonical_replay_state(comments, task=task, now=now)
-    return state.state == "claimed" and state.owner == agent_id
+    return bool(actor_login) and state.state == "claimed" and state.owner == agent_id and state.owner_actor == actor_login
 
 
 def canonical_result_present(
@@ -134,13 +139,16 @@ def canonical_result_present(
     *,
     task: str,
     agent_id: str,
+    actor_login: str,
     now: datetime | None = None,
 ) -> bool:
     state = _canonical_replay_state(comments, task=task, now=now)
     return (
         state.state == "completed"
         and state.latest_result is not None
+        and bool(actor_login)
         and state.latest_result.agent_id == agent_id
+        and state.latest_result.actor_login == actor_login
     )
 
 
@@ -420,11 +428,12 @@ def ensure_canonical_lease(
     relay: Relay,
     task: str,
     agent_id: str,
+    actor_login: str,
     phase: str,
     now: datetime | None = None,
 ) -> Any:
     state = _canonical_replay_state(comments(token, issue_no), task=task, now=now)
-    if state.state != "claimed" or state.owner != agent_id:
+    if not actor_login or state.state != "claimed" or state.owner != agent_id or state.owner_actor != actor_login:
         raise LauncherError(f"canonical lease ownership was lost before {phase}")
 
     if state.lease_status != "expiring":
@@ -461,17 +470,19 @@ def ensure_canonical_lease(
         return (
             refreshed.state == "claimed"
             and refreshed.owner == agent_id
+            and refreshed.owner_actor == actor_login
             and refreshed.lease_expires_at != previous_expiry
             and latest is not None
             and latest.type == "HEARTBEAT"
             and latest.agent_id == agent_id
+            and latest.actor_login == actor_login
         )
 
     if not wait_for_protocol_event(token, issue_no, renewed):
         raise LauncherError(f"canonical HEARTBEAT was not verified before {phase}")
 
     refreshed = _canonical_replay_state(comments(token, issue_no), task=task, now=now)
-    if refreshed.state != "claimed" or refreshed.owner != agent_id:
+    if refreshed.state != "claimed" or refreshed.owner != agent_id or refreshed.owner_actor != actor_login:
         raise LauncherError(f"canonical lease ownership was lost after HEARTBEAT before {phase}")
     if refreshed.lease_expires_at == previous_expiry:
         raise LauncherError(f"canonical HEARTBEAT did not extend the lease before {phase}")
@@ -489,7 +500,10 @@ def run_worker(
     token: str | None,
     relay: Relay,
     max_steps: int,
+    actor_login: str,
 ) -> int:
+    if not isinstance(actor_login, str) or not actor_login.strip():
+        raise LauncherError("expected GitHub actor is required from the trusted launch host")
     task = str(dispatch["task"])
     issue_url = str(dispatch["source"]["issue_url"])
     issue_no = issue_number_from_dispatch(dispatch)
@@ -523,7 +537,7 @@ def run_worker(
     if not wait_for_protocol_event(
         token,
         issue_no,
-        lambda rows: canonical_claim_present(rows, task=task, agent_id=agent),
+        lambda rows: canonical_claim_present(rows, task=task, agent_id=agent, actor_login=actor_login),
     ):
         raise LauncherError("canonical CLAIM was not verified after submission")
 
@@ -544,6 +558,7 @@ def run_worker(
                 relay=relay,
                 task=task,
                 agent_id=agent,
+                actor_login=actor_login,
                 phase="task work",
             )
             claimed = True
@@ -589,6 +604,7 @@ def run_worker(
                     relay=relay,
                     task=task,
                     agent_id=agent,
+                    actor_login=actor_login,
                     phase="RESULT submission",
                 )
                 summary = str(model_command.get("summary") or "").strip()
@@ -609,6 +625,7 @@ def run_worker(
                         rows,
                         task=task,
                         agent_id=agent,
+                        actor_login=actor_login,
                     ),
                 ):
                     print(
@@ -720,6 +737,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan-file")
     parser.add_argument("--plan-url")
     parser.add_argument("--session-id")
+    parser.add_argument("--worker-actor", help="Expected GitHub comment author, supplied by trusted launch configuration")
     parser.add_argument("--max-steps", type=int, default=80)
     parser.add_argument("--print-dispatch", action="store_true")
     args = parser.parse_args(argv)
@@ -739,6 +757,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(dispatch, ensure_ascii=False, indent=2))
         return 0
 
+    if not args.worker_actor or not args.worker_actor.strip():
+        raise LauncherError("--worker-actor is required for the production launcher")
     if not args.session_id:
         raise LauncherError("--session-id is required for the production launcher")
     base = os.environ.get("SUPABASE_URL")
@@ -750,6 +770,7 @@ def main(argv: list[str] | None = None) -> int:
         token=token,
         relay=Relay(base, key, args.session_id),
         max_steps=args.max_steps,
+        actor_login=args.worker_actor,
     )
 
 

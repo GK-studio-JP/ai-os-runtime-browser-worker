@@ -24,9 +24,9 @@ jobs:
     timeout-minutes: 15
     env:
       GITHUB_TOKEN: ${{ github.token }}
-      AI_OS_CONTEXT_SHA: 6b03b3e41995043e78faa1081d94973336aca86a
-      AI_OS_SCHEDULER_SHA: 7e1df073fda8de08254c3fa9cefa27ec1b2708f2
-      AI_OS_KERNEL_SHA: 7b8040b0690838d025c2b336c544c274f1e1db40
+      AI_OS_CONTEXT_SHA: cc5fc109f73c938fbf976f34ea777ce52c791777
+      AI_OS_SCHEDULER_SHA: f68a81f44409e3103b27838b4ad89e3021b25249
+      AI_OS_KERNEL_SHA: d472370b5dd61010ac610904d5a79f0f7686c0ac
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -90,9 +90,9 @@ jobs:
         shell: bash
         run: |
           if [[ -f worker/capsule.json ]]; then
-            python runtime.py preflight --boot worker/boot.json --capsule worker/capsule.json --fresh runtime/fresh.json --worker-id runtime-preflight --output runtime/preflight.json
+            python runtime.py preflight --boot worker/boot.json --capsule worker/capsule.json --fresh runtime/fresh.json --worker-id runtime-preflight --worker-actor github-actions[bot] --output runtime/preflight.json
           else
-            python runtime.py preflight --boot worker/boot.json --fresh runtime/fresh.json --worker-id runtime-preflight --output runtime/preflight.json
+            python runtime.py preflight --boot worker/boot.json --fresh runtime/fresh.json --worker-id runtime-preflight --worker-actor github-actions[bot] --output runtime/preflight.json
           fi
       - name: Validate preflight
         run: |

@@ -47,6 +47,7 @@ def fresh(state="open", owner=None, through=10, safe=True):
         "state": state,
         "history_safe": safe,
         "owner": owner,
+        "owner_actor": "repo-owner" if owner else None,
         "through_comment_id": through,
     }
 
@@ -58,39 +59,41 @@ def worker_invocation():
         "persist_required": True,
         "fingerprint": "sha256:invocation",
         "worker_id": "worker-1",
+        "worker_actor": "repo-owner",
     }
 
 
 class RuntimeTests(unittest.TestCase):
     def test_open_task_requires_claim(self):
-        p = preflight(boot(), capsule(), fresh(), worker_id="worker-1")
+        p = preflight(boot(), capsule(), fresh(), worker_id="worker-1", worker_actor="repo-owner")
         self.assertEqual(p["status"], "CLAIM_REQUIRED")
         self.assertEqual(p["claim_proposal"]["event"]["type"], "CLAIM")
         self.assertEqual(p["claim_proposal"]["event"]["agent_id"], "worker-1")
 
     def test_stale_context_fails_closed(self):
-        p = preflight(boot(), capsule(), fresh(through=11), worker_id="worker-1")
+        p = preflight(boot(), capsule(), fresh(through=11), worker_id="worker-1", worker_actor="repo-owner")
         self.assertEqual(p["status"], "STALE_CONTEXT")
         self.assertEqual(p["reason_code"], "canonical_history_changed")
 
     def test_matching_live_owner_is_ready(self):
-        p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1")
+        p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1", worker_actor="repo-owner")
         self.assertEqual(p["status"], "READY")
 
     def test_prepare_binds_invocation_to_worker_and_capsule(self):
-        p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1")
+        p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1", worker_actor="repo-owner")
         inv = prepare(boot(), capsule(), p, driver="manual")
         self.assertEqual(inv["worker_id"], "worker-1")
         self.assertEqual(inv["input"]["capsule"]["fingerprint"], "cap-123")
         self.assertTrue(inv["fingerprint"].startswith("sha256:"))
 
     def test_completed_result_becomes_result_proposal(self):
-        p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1")
+        p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1", worker_actor="repo-owner")
         inv = prepare(boot(), capsule(), p, driver="manual")
         result = {
             "schema": "ai-os-worker-result:v1",
             "invocation_fingerprint": inv["fingerprint"],
             "worker_id": "worker-1",
+            "worker_actor": "repo-owner",
             "status": "completed",
             "summary": "done",
             "next_action": None,
@@ -102,12 +105,13 @@ class RuntimeTests(unittest.TestCase):
         self.assertIsNone(out["event_proposal"]["event"]["next_action"])
 
     def test_gate_requires_same_live_owner_and_history(self):
-        p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1")
+        p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1", worker_actor="repo-owner")
         inv = prepare(boot(), capsule(), p, driver="manual")
         result = {
             "schema": "ai-os-worker-result:v1",
             "invocation_fingerprint": inv["fingerprint"],
             "worker_id": "worker-1",
+            "worker_actor": "repo-owner",
             "status": "progress",
             "summary": "checkpoint",
             "next_action": "continue",
@@ -135,6 +139,7 @@ class RuntimeTests(unittest.TestCase):
             "'schema':'ai-os-worker-result:v1',"
             "'invocation_fingerprint':inv['fingerprint'],"
             "'worker_id':inv['worker_id'],"
+            "'worker_actor':inv['worker_actor'],"
             "'status':'completed',"
             "'summary':'driver ok',"
             "'next_action':None,"
@@ -158,6 +163,7 @@ class RuntimeTests(unittest.TestCase):
             "'schema':'ai-os-worker-result:v1',"
             "'invocation_fingerprint':inv['fingerprint'],"
             "'worker_id':'worker-2',"
+            "'worker_actor':inv['worker_actor'],"
             "'status':'completed',"
             "'summary':'wrong identity',"
             "'next_action':None,"

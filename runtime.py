@@ -109,8 +109,11 @@ def preflight(
     fresh: dict[str, Any],
     *,
     worker_id: str,
+    worker_actor: str,
 ) -> dict[str, Any]:
     dispatch = validate_boot(boot, capsule)
+    if not isinstance(worker_actor, str) or not worker_actor.strip():
+        raise ValueError("worker_actor is required from the trusted execution host")
     if not worker_id.strip():
         raise ValueError("worker_id is required")
 
@@ -119,6 +122,7 @@ def preflight(
         "authoritative": False,
         "persist_required": True,
         "worker_id": worker_id,
+        "worker_actor": worker_actor,
         "source_plan_fingerprint": boot.get("source_plan_fingerprint"),
         "status": "IDLE",
         "reason_code": "no_dispatch",
@@ -151,7 +155,9 @@ def preflight(
             )
         elif fresh.get("state") == "claimed":
             owner = fresh.get("owner")
-            if owner == worker_id:
+            if not fresh.get("owner_actor"):
+                result.update(status="STOP", reason_code="owner_actor_missing")
+            elif owner == worker_id and fresh.get("owner_actor") == worker_actor:
                 result.update(status="READY", reason_code="ownership_confirmed")
             else:
                 result.update(status="WAIT", reason_code="owned_by_other_worker")
@@ -178,6 +184,9 @@ def prepare(
         raise ValueError("preflight must be READY before Worker invocation")
     if preflight_result.get("task") != dispatch.get("task"):
         raise ValueError("preflight task does not match dispatch")
+    worker_actor = preflight_result.get("worker_actor")
+    if not isinstance(worker_actor, str) or not worker_actor.strip():
+        raise ValueError("preflight worker_actor is required")
     worker_id = preflight_result.get("worker_id")
     if not worker_id:
         raise ValueError("preflight worker_id is required")
@@ -188,6 +197,7 @@ def prepare(
         "persist_required": True,
         "driver": driver,
         "worker_id": worker_id,
+        "worker_actor": worker_actor,
         "task": dispatch["task"],
         "process": dispatch["process"],
         "target_repository": dispatch.get("target_repository"),
@@ -205,6 +215,7 @@ def prepare(
                 "schema",
                 "invocation_fingerprint",
                 "worker_id",
+                "worker_actor",
                 "status",
                 "summary",
                 "next_action",
@@ -230,6 +241,8 @@ def normalize(invocation: dict[str, Any], result: dict[str, Any]) -> dict[str, A
         raise ValueError("unsupported Worker result schema")
     if result.get("invocation_fingerprint") != invocation.get("fingerprint"):
         raise ValueError("Worker result does not match invocation fingerprint")
+    if not invocation.get("worker_actor") or result.get("worker_actor") != invocation.get("worker_actor"):
+        raise ValueError("Worker result actor identity does not match invocation")
     if result.get("worker_id") != invocation.get("worker_id"):
         raise ValueError("Worker result identity does not match invocation")
     status = result.get("status")
@@ -279,6 +292,7 @@ def normalize(invocation: dict[str, Any], result: dict[str, Any]) -> dict[str, A
         "authoritative": False,
         "persist_required": True,
         "worker_id": invocation["worker_id"],
+        "worker_actor": invocation["worker_actor"],
         "task": invocation["task"],
         "status": status,
         "summary": summary,
@@ -305,6 +319,7 @@ def gate(boot: dict[str, Any], fresh: dict[str, Any], outcome: dict[str, Any]) -
         raise ValueError("unsupported runtime outcome schema")
     task = outcome.get("task")
     worker_id = outcome.get("worker_id")
+    worker_actor = outcome.get("worker_actor")
     eligible = True
     reason = "fresh_owner_confirmed"
 
@@ -314,7 +329,9 @@ def gate(boot: dict[str, Any], fresh: dict[str, Any], outcome: dict[str, Any]) -
         eligible, reason = False, "history_unsafe"
     elif fresh.get("state") != "claimed":
         eligible, reason = False, "task_not_claimed"
-    elif fresh.get("owner") != worker_id:
+    elif not worker_actor or not fresh.get("owner_actor"):
+        eligible, reason = False, "owner_actor_missing"
+    elif fresh.get("owner") != worker_id or fresh.get("owner_actor") != worker_actor:
         eligible, reason = False, "ownership_changed"
     elif fresh.get("through_comment_id") != outcome.get("canonical_through_comment_id"):
         eligible, reason = False, "canonical_history_changed"
@@ -327,6 +344,7 @@ def gate(boot: dict[str, Any], fresh: dict[str, Any], outcome: dict[str, Any]) -
         "reason_code": reason,
         "task": task,
         "worker_id": worker_id,
+        "worker_actor": worker_actor,
         "source_plan_fingerprint": boot.get("source_plan_fingerprint"),
         "outcome_fingerprint": outcome.get("fingerprint"),
         "canonical_through_comment_id": fresh.get("through_comment_id"),
@@ -338,7 +356,7 @@ def gate(boot: dict[str, Any], fresh: dict[str, Any], outcome: dict[str, Any]) -
 
 def command_preflight(args: argparse.Namespace) -> None:
     capsule = _read(args.capsule) if args.capsule else None
-    _write(args.output, preflight(_read(args.boot), capsule, _read(args.fresh), worker_id=args.worker_id))
+    _write(args.output, preflight(_read(args.boot), capsule, _read(args.fresh), worker_id=args.worker_id, worker_actor=args.worker_actor))
 
 
 def command_prepare(args: argparse.Namespace) -> None:
@@ -365,6 +383,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--capsule")
     p.add_argument("--fresh", required=True)
     p.add_argument("--worker-id", required=True)
+    p.add_argument("--worker-actor", required=True, help="Expected GitHub login supplied by the trusted host, never by Worker output")
     p.add_argument("--output")
     p.set_defaults(func=command_preflight)
 

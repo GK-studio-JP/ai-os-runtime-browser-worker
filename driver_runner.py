@@ -33,6 +33,8 @@ def validate_invocation(invocation: dict[str, Any]) -> None:
         raise ValueError("worker invocation must require persistence")
     if not invocation.get("fingerprint"):
         raise ValueError("worker invocation fingerprint is required")
+    if not isinstance(invocation.get("worker_actor"), str) or not invocation["worker_actor"].strip():
+        raise ValueError("worker invocation worker_actor is required")
     if not invocation.get("worker_id"):
         raise ValueError("worker invocation worker_id is required")
 
@@ -73,6 +75,8 @@ def run_driver(
         raise ValueError(f"unsupported Worker result schema: {result.get('schema')!r}")
     if result.get("invocation_fingerprint") != invocation.get("fingerprint"):
         raise ValueError("Worker result does not match invocation fingerprint")
+    if result.get("worker_actor") != invocation.get("worker_actor"):
+        raise ValueError("Worker result actor identity does not match invocation")
     if result.get("worker_id") != invocation.get("worker_id"):
         raise ValueError("Worker result identity does not match invocation")
     return result
