@@ -257,6 +257,7 @@ class LauncherLoopCapTests(unittest.TestCase):
         ):
             code = run_worker(
                 dispatch(),
+                actor_login="repo-owner",
                 token=None,
                 relay=relay,
                 max_steps=len(sequence),
