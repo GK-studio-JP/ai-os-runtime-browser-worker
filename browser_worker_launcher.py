@@ -356,7 +356,11 @@ def protocol_event_body(
         "next_action": next_action,
         "artifacts": artifacts,
     }
-    return "<!-- ai-bb:v1 -->\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+    return (
+        "<!-- ai-bb:v1 -->\n```json\n"
+        + json.dumps(payload, ensure_ascii=False, indent=2)
+        + "\n```"
+    )
 
 
 def append_issue_comment(
