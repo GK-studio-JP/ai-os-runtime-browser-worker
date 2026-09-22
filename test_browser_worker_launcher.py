@@ -16,6 +16,7 @@ from ai_os_browser_worker.evidence import validate_finish_evidence
 from ai_os_browser_worker.navigation_policy import (
     _validate_model_action,
     refresh_element_args,
+    validate_mutation_receipt,
 )
 from browser_worker_launcher import (
     LauncherError,
@@ -54,6 +55,38 @@ def plan(rows, process="PROC-RUNTIME-BROWSER-WORKER"):
     }
     canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     value["fingerprint"] = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return value
+
+
+def mutation_receipt(
+    *,
+    task="#7",
+    repository="GK-studio-JP/ai-os-runtime-browser-worker",
+    process="PROC-RUNTIME-BROWSER-WORKER",
+    plan_fingerprint="sha256:plan",
+):
+    value = {
+        "schema": "ai-os-kernel-capability-receipt:v1",
+        "authoritative": False,
+        "persist_required": True,
+        "approved": True,
+        "caller": process,
+        "operation": "mutate_repository",
+        "required_capability": "repository.write.branch",
+        "task": task,
+        "target_repository": repository,
+        "source_plan_fingerprint": plan_fingerprint,
+        "constraints": {
+            "mode": "branch-pr",
+            "allowed_browser_actions": ["fill", "click"],
+            "forbid_direct_main_commit": True,
+            "require_new_branch": True,
+            "require_pull_request": True,
+        },
+        "errors": [],
+    }
+    material = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    value["fingerprint"] = "sha256:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
     return value
 
 
@@ -108,12 +141,13 @@ class ModelCommandTests(unittest.TestCase):
         }
         self.repo_url = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker"
 
-    def validate(self, command, observation):
+    def validate(self, command, observation, receipt=None):
         return _validate_model_action(
             command,
             observation,
             task_payload=self.payload,
             issue_url=self.issue,
+            mutation_receipt=receipt,
         )
 
     def test_extract_model_command_uses_last_matching_json(self):
@@ -207,6 +241,108 @@ class ModelCommandTests(unittest.TestCase):
                         observation,
                     )
 
+    def test_kernel_receipt_binds_dispatch_task_repository_and_plan(self):
+        item = dispatch("#7")
+        item["target_repository"] = self.payload["repository"]
+        receipt = mutation_receipt()
+        validated = validate_mutation_receipt(
+            receipt,
+            dispatch=item,
+            plan_fingerprint="sha256:plan",
+        )
+        self.assertTrue(validated["approved"])
+
+        tampered = dict(receipt)
+        tampered["task"] = "#8"
+        with self.assertRaisesRegex(LauncherError, "fingerprint"):
+            validate_mutation_receipt(
+                tampered,
+                dispatch=item,
+                plan_fingerprint="sha256:plan",
+            )
+
+    def test_fill_requires_receipt_and_is_limited_to_repo_editor(self):
+        observation = {
+            "generation": 4,
+            "url": self.repo_url + "/edit/main/README.md",
+            "elements": [
+                {
+                    "id": "g4-e8",
+                    "role": "textbox",
+                    "label": "Editing README.md file contents",
+                }
+            ],
+        }
+        command = {
+            "action": "fill",
+            "args": {"elementId": "g4-e8", "text": "replacement"},
+        }
+        with self.assertRaisesRegex(LauncherError, "disallowed model action"):
+            self.validate(command, observation)
+
+        action, args = self.validate(command, observation, mutation_receipt())
+        self.assertEqual(action, "fill")
+        self.assertEqual(args["text"], "replacement")
+
+        outside = dict(observation)
+        outside["url"] = self.repo_url
+        with self.assertRaisesRegex(LauncherError, "branch/PR pages"):
+            self.validate(command, outside, mutation_receipt())
+
+    def test_commit_to_main_is_denied_until_new_branch_selected(self):
+        observation = {
+            "generation": 4,
+            "url": self.repo_url + "/edit/main/README.md",
+            "elements": [
+                {
+                    "id": "g4-e20",
+                    "role": "button",
+                    "label": "Commit changes",
+                },
+                {
+                    "id": "g4-e21",
+                    "role": "radio",
+                    "label": "Commit directly to the main branch",
+                    "states": {"checked": True},
+                },
+                {
+                    "id": "g4-e22",
+                    "role": "radio",
+                    "label": "Create a new branch for this commit and start a pull request",
+                    "states": {"checked": False},
+                },
+            ],
+        }
+        command = {"action": "click", "args": {"elementId": "g4-e20"}}
+        with self.assertRaisesRegex(LauncherError, "direct commit to main"):
+            self.validate(command, observation, mutation_receipt())
+
+        observation["elements"][1]["states"]["checked"] = False
+        observation["elements"][2]["states"]["checked"] = True
+        self.assertEqual(
+            self.validate(command, observation, mutation_receipt())[0],
+            "click",
+        )
+
+    def test_merge_control_is_denied_even_with_receipt(self):
+        observation = {
+            "generation": 4,
+            "url": self.repo_url + "/compare/main...feature",
+            "elements": [
+                {
+                    "id": "g4-e30",
+                    "role": "button",
+                    "label": "Merge pull request",
+                }
+            ],
+        }
+        with self.assertRaisesRegex(LauncherError, "dangerous mutation control"):
+            self.validate(
+                {"action": "click", "args": {"elementId": "g4-e30"}},
+                observation,
+                mutation_receipt(),
+            )
+
     def test_click_normalizes_alias_and_requires_navigation_link(self):
         observation = {
             "generation": 4,
@@ -288,6 +424,37 @@ class ElementRefreshTests(unittest.TestCase):
                 fresh_page,
             ),
             {"elementId": "g6-e150"},
+        )
+
+    def test_remaps_fill_to_fresh_generation_by_role_and_label(self):
+        observation = {
+            "generation": 2,
+            "elements": [
+                {
+                    "id": "g2-e20",
+                    "role": "textbox",
+                    "label": "Commit message",
+                }
+            ],
+        }
+        fresh_page = {
+            "generation": 5,
+            "elements": [
+                {
+                    "id": "g5-e22",
+                    "role": "textbox",
+                    "label": "Commit message",
+                }
+            ],
+        }
+        self.assertEqual(
+            refresh_element_args(
+                "fill",
+                {"elementId": "g2-e20", "text": "msg"},
+                observation,
+                fresh_page,
+            ),
+            {"elementId": "g5-e22", "text": "msg"},
         )
 
     def test_rejects_ambiguous_fresh_element_match(self):

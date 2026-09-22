@@ -8,6 +8,7 @@ import sys
 import time
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from ai_os_browser_worker.dispatch import (
@@ -29,6 +30,7 @@ from ai_os_browser_worker.navigation_policy import (
     _task_repository,
     _validate_model_action,
     refresh_element_args,
+    validate_mutation_receipt,
 )
 from ai_os_browser_worker.relay import Relay, RelayCommandError
 from ai_os_browser_worker.safety import (
@@ -273,6 +275,7 @@ def prompt(
     claimed: bool,
     task_payload: dict[str, Any],
     ledger: list[dict[str, Any]],
+    mutation_enabled: bool,
 ) -> str:
     claim_state = "verified" if claimed else "not verified"
     repository = _task_repository(task_payload)
@@ -302,6 +305,30 @@ def prompt(
         "visited_urls": evidence_urls[-8:],
         "observed_full_shas": evidence_shas[-8:],
     }
+    if mutation_enabled:
+        mutation_policy = (
+            "A Kernel-bound branch/PR mutation receipt is active. "
+            "You may use fill on current-generation textboxes and approved commit/PR controls "
+            "only inside the task repository. Never commit directly to main, never merge a PR, "
+            "and never use Settings or destructive controls. On the first source mutation from "
+            "main, select 'Create a new branch for this commit and start a pull request'. "
+            "Subsequent commits may target that non-main branch."
+        )
+        action_contract = (
+            '{"kind":"browser_action","action":"goto|getPage|click|fill|scroll|setViewport",'
+            '"args":{...},"reason":"..."}'
+        )
+    else:
+        mutation_policy = (
+            "Model-driven browser mutation is disabled because no valid Kernel capability "
+            "receipt is present. click is allowed only for current-generation navigation links "
+            "inside the task repository."
+        )
+        action_contract = (
+            '{"kind":"browser_action","action":"goto|getPage|click|scroll|setViewport",'
+            '"args":{...},"reason":"..."}'
+        )
+
     return f"""Control the Browser Agent for {task}. Canonical Issue: {issue}
 Run: {agent}. CLAIM: {claim_state}. The launcher writes CLAIM/RESULT; do not write those comments yourself.
 The task definition is supplied below on every turn. After CLAIM is verified, do not return to the canonical Issue merely to reread the task. Continue verification from the current task page.
@@ -312,9 +339,10 @@ TASK:
 EVIDENCE ALREADY OBSERVED BY THE LAUNCHER:
 {json.dumps(evidence_context, ensure_ascii=False, separators=(",", ":"))}
 If the evidence above already proves every acceptance item, return finish now instead of revisiting pages.
+Mutation policy: {mutation_policy}
 Return exactly one JSON object, no prose:
-{{"kind":"browser_action","action":"goto|getPage|click|scroll|setViewport","args":{{...}},"reason":"..."}}
-Model-driven browser mutation is disabled pending Kernel capability receipts. click is allowed only for current-generation navigation links inside the task repository. For click use args={{"elementId":"gN-eM"}}.
+{action_contract}
+For click/fill use args={{"elementId":"gN-eM", ...}} and only current-generation IDs.
 or {{"kind":"finish","summary":"what was verified","artifacts":["immutable artifact"],"evidence":[{{"kind":"visited_url","value":"https://..."}},{{"kind":"extracted_fact","value":"observed fact"}}],"reason":"done"}}
 Evidence must come from pages actually observed in the task browser, not from the Issue text or Gemini. If the task asks for a current commit SHA, put the full 40-character SHA in artifacts and evidence. If it asks whether a file exists, actually visit that file before finish.
 or {{"kind":"wait","reason":"..."}}
@@ -493,6 +521,7 @@ def run_worker(
     token: str | None,
     relay: Relay,
     max_steps: int,
+    mutation_receipt: dict[str, Any] | None = None,
 ) -> int:
     task = str(dispatch["task"])
     issue_url = str(dispatch["source"]["issue_url"])
@@ -569,6 +598,7 @@ def run_worker(
                     claimed,
                     task_payload,
                     ledger,
+                    mutation_receipt is not None,
                 ),
             )
 
@@ -639,6 +669,7 @@ def run_worker(
                     observation,
                     task_payload=task_payload,
                     issue_url=issue_url,
+                    mutation_receipt=mutation_receipt,
                 )
             except LauncherError as exc:
                 feedback = str(exc)
@@ -646,7 +677,7 @@ def run_worker(
 
             relay.command("switchPage", {"index": 0})
             guard_page = page
-            if action == "click":
+            if action in {"click", "fill"}:
                 fresh_page = relay.command("getPage", {})
                 _record_page_evidence(ledger, fresh_page)
                 try:
@@ -655,6 +686,29 @@ def run_worker(
                     feedback = str(exc)
                     continue
                 guard_page = fresh_page
+
+            is_mutation = action == "fill"
+            if action == "click":
+                element_id = str(args.get("elementId") or "")
+                clicked = next(
+                    (
+                        element
+                        for element in guard_page.get("elements") or []
+                        if element.get("id") == element_id
+                    ),
+                    None,
+                )
+                is_mutation = bool(clicked and clicked.get("role") != "link")
+            if is_mutation:
+                ensure_canonical_lease(
+                    token=token,
+                    issue_no=issue_no,
+                    issue_url=issue_url,
+                    relay=relay,
+                    task=task,
+                    agent_id=agent,
+                    phase="browser mutation",
+                )
 
             guarded_args = loop_guard_args(action, args, guard_page)
             try:
@@ -724,6 +778,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan-file")
     parser.add_argument("--plan-url")
     parser.add_argument("--session-id")
+    parser.add_argument("--mutation-receipt")
     parser.add_argument("--max-steps", type=int, default=80)
     parser.add_argument("--print-dispatch", action="store_true")
     args = parser.parse_args(argv)
@@ -743,6 +798,18 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(dispatch, ensure_ascii=False, indent=2))
         return 0
 
+    mutation_receipt = None
+    if args.mutation_receipt:
+        try:
+            raw_receipt = json.loads(Path(args.mutation_receipt).read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise LauncherError(f"failed to read Kernel mutation receipt: {exc}") from exc
+        mutation_receipt = validate_mutation_receipt(
+            raw_receipt,
+            dispatch=dispatch,
+            plan_fingerprint=str(plan.get("fingerprint") or ""),
+        )
+
     if not args.session_id:
         raise LauncherError("--session-id is required for the production launcher")
     base = os.environ.get("SUPABASE_URL")
@@ -754,6 +821,7 @@ def main(argv: list[str] | None = None) -> int:
         token=token,
         relay=Relay(base, key, args.session_id),
         max_steps=args.max_steps,
+        mutation_receipt=mutation_receipt,
     )
 
 
