@@ -37,6 +37,33 @@ def _task_repository(task_payload: dict[str, Any]) -> str | None:
     return repository
 
 
+def _context_repositories(task_payload: dict[str, Any]) -> set[str]:
+    repositories: set[str] = set()
+    refs = task_payload.get("context_refs")
+    if not isinstance(refs, list):
+        return repositories
+
+    for raw in refs:
+        if not isinstance(raw, str):
+            continue
+        parsed = urllib.parse.urlparse(raw.strip())
+        if parsed.scheme != "https" or not parsed.hostname:
+            continue
+        host = parsed.hostname.lower()
+        parts = [part for part in (parsed.path or "").split("/") if part]
+        candidate: str | None = None
+        if host == "github.com" and len(parts) >= 2:
+            candidate = f"{parts[0]}/{parts[1]}"
+        elif host == "api.github.com" and len(parts) >= 3 and parts[0] == "repos":
+            candidate = f"{parts[1]}/{parts[2]}"
+        elif host == "raw.githubusercontent.com" and len(parts) >= 2:
+            candidate = f"{parts[0]}/{parts[1]}"
+
+        if candidate and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", candidate):
+            repositories.add(candidate)
+    return repositories
+
+
 def _allowed_navigation_url(
     url: str,
     *,
@@ -64,24 +91,28 @@ def _allowed_navigation_url(
     repository = _task_repository(task_payload)
     if not repository:
         raise LauncherError("browser navigation requires task repository in owner/repo form")
-    owner, repo = repository.split("/", 1)
+    repositories = {repository, *_context_repositories(task_payload)}
     host = parsed.hostname.lower()
     path = parsed.path or "/"
 
     allowed = False
-    if host == "github.com":
-        prefix = f"/{owner}/{repo}"
-        allowed = path == prefix or path.startswith(prefix + "/")
-    elif host == "api.github.com":
-        prefix = f"/repos/{owner}/{repo}"
-        allowed = path == prefix or path.startswith(prefix + "/")
-    elif host == "raw.githubusercontent.com":
-        prefix = f"/{owner}/{repo}/"
-        allowed = path.startswith(prefix)
+    for allowed_repository in repositories:
+        owner, repo = allowed_repository.split("/", 1)
+        if host == "github.com":
+            prefix = f"/{owner}/{repo}"
+            allowed = path == prefix or path.startswith(prefix + "/")
+        elif host == "api.github.com":
+            prefix = f"/repos/{owner}/{repo}"
+            allowed = path == prefix or path.startswith(prefix + "/")
+        elif host == "raw.githubusercontent.com":
+            prefix = f"/{owner}/{repo}/"
+            allowed = path.startswith(prefix)
+        if allowed:
+            break
 
     if not allowed:
         raise LauncherError(
-            f"browser navigation outside task repository is denied: {value}"
+            f"browser navigation outside task/context repositories is denied: {value}"
         )
     return value
 
