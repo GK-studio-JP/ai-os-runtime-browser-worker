@@ -1231,6 +1231,49 @@ class ObservationTests(unittest.TestCase):
         self.assertIn("do not browse /pulls first", text)
         self.assertIn("exact observed 40-character SHA alone", text)
 
+    def test_prompt_marks_new_file_editor_progress_after_filename(self):
+        task_payload = {
+            "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
+            "objective": "Add a drift guard.",
+            "acceptance": ["Create a branch and pull request."],
+            "contracts": [],
+            "context_refs": [],
+        }
+        text = prompt(
+            "browser-chat-gemini-test",
+            "#16",
+            "https://github.com/GK-studio-JP/ai-bulletin-board/issues/16",
+            {
+                "url": "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/new/main",
+                "generation": 8,
+                "pageText": "Creating a new file",
+                "elements": [
+                    {
+                        "id": "g8-e198",
+                        "role": "textbox",
+                        "label": (
+                            "Editing test_contract_drift.py file contents "
+                            "Use Control + Shift + m to toggle the tab key moving focus."
+                        ),
+                    }
+                ],
+                "dialogs": [],
+            },
+            2,
+            "ready",
+            True,
+            task_payload,
+            [],
+            True,
+            source_mutation_performed=True,
+        )
+        self.assertIn(
+            '"editor_progress":{"file_name":"test_contract_drift.py",'
+            '"next_required":"fill:file_contents"}',
+            text,
+        )
+        self.assertIn("Do not fill file_name again", text)
+
 
 if __name__ == "__main__":
     unittest.main()
