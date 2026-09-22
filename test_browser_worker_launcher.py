@@ -222,6 +222,21 @@ class ModelCommandTests(unittest.TestCase):
         self.assertEqual(action, "goto")
         self.assertEqual(args["url"], self.issue)
 
+    def test_goto_allows_explicit_context_repository_read(self):
+        self.payload["context_refs"] = [
+            "https://github.com/GK-studio-JP/ai-os-runtime/commit/" + "a" * 40,
+        ]
+        observation = {"generation": 4, "url": self.repo_url, "elements": []}
+        context_blob = (
+            "https://github.com/GK-studio-JP/ai-os-runtime/blob/main/runtime.py"
+        )
+        action, args = self.validate(
+            {"action": "goto", "args": {"url": context_blob}},
+            observation,
+        )
+        self.assertEqual(action, "goto")
+        self.assertEqual(args["url"], context_blob)
+
     def test_goto_rejects_non_https_private_and_cross_repository_urls(self):
         observation = {"generation": 4, "url": self.repo_url, "elements": []}
         denied = [
