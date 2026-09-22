@@ -63,6 +63,11 @@ def validate_finish_evidence(
     ledger: list[dict[str, Any]],
     task_payload: dict[str, Any],
     issue_url: str,
+    *,
+    source_mutation_performed: bool = True,
+    require_new_pr: bool = False,
+    preexisting_pull_urls: set[str] | None = None,
+    preexisting_workflow_urls: set[str] | None = None,
 ) -> str | None:
     summary = str(command.get("summary") or "").strip()
     artifacts = command.get("artifacts")
@@ -144,19 +149,38 @@ def validate_finish_evidence(
     if _requires_repository_change(task_payload):
         if not repository:
             return "finish rejected: implementation evidence requires task repository in owner/repo form."
+        if require_new_pr and not source_mutation_performed:
+            return (
+                "finish rejected: implementation task requires an observed source-file "
+                "mutation in this run before RESULT."
+            )
         repo_prefix = f"https://github.com/{repository}"
+        artifact_pattern = (
+            re.escape(repo_prefix) + r"/pull/\d+"
+            if require_new_pr
+            else re.escape(repo_prefix) + r"/(?:pull/\d+|commit/[0-9a-fA-F]{40})"
+        )
         implementation_urls = [
             str(item).strip()
             for item in artifacts
-            if re.fullmatch(
-                re.escape(repo_prefix) + r"/(?:pull/\d+|commit/[0-9a-fA-F]{40})",
-                str(item).strip(),
-            )
+            if re.fullmatch(artifact_pattern, str(item).strip())
         ]
         if not implementation_urls:
+            required_kind = "new pull request" if require_new_pr else "pull request or commit"
             return (
                 "finish rejected: implementation task requires a task-repository "
-                "pull request or commit URL in RESULT artifacts."
+                f"{required_kind} URL in RESULT artifacts."
+            )
+        old_pulls = {
+            str(url).rstrip("/")
+            for url in (preexisting_pull_urls or set())
+        }
+        if require_new_pr and any(
+            url.rstrip("/") in old_pulls for url in implementation_urls
+        ):
+            return (
+                "finish rejected: implementation evidence reused a pull request that "
+                "predated this worker run."
             )
         observed_implementation = [url for url in implementation_urls if visited(url)]
         if not observed_implementation:
@@ -187,6 +211,17 @@ def validate_finish_evidence(
             return (
                 "finish rejected: acceptance requires an exact GitHub Actions run URL "
                 "in RESULT artifacts."
+            )
+        old_workflows = {
+            str(url).rstrip("/")
+            for url in (preexisting_workflow_urls or set())
+        }
+        if require_new_pr and any(
+            url.rstrip("/") in old_workflows for url in workflow_urls
+        ):
+            return (
+                "finish rejected: workflow evidence reused a run that predated "
+                "this worker run."
             )
         observed_workflows = [url for url in workflow_urls if visited(url)]
         if not observed_workflows:
