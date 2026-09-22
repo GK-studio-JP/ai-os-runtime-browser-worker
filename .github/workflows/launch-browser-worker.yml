@@ -14,8 +14,8 @@ jobs:
       PLAN_URL: https://github.com/GK-studio-JP/ai-os-scheduler/releases/download/browser-worker-dispatch/browser-worker-plan.json
       AI_OS_CONTEXT_SHA: 6b03b3e41995043e78faa1081d94973336aca86a
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
 
