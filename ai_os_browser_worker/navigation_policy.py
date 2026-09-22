@@ -241,8 +241,13 @@ def _semantic_element_args(
     args: dict[str, Any],
     observation: dict[str, Any],
 ) -> dict[str, Any]:
+    args = dict(args)
+    if action == "fill" and "text" not in args and isinstance(args.get("value"), str):
+        args["text"] = args["value"]
+    args.pop("value", None)
+
     if args.get("elementId") or args.get("id"):
-        return dict(args)
+        return args
 
     generation = observation.get("generation")
     if generation is None:
@@ -334,6 +339,7 @@ def _semantic_element_args(
     resolved.pop("field", None)
     resolved.pop("label", None)
     resolved.pop("target", None)
+    resolved.pop("value", None)
     return resolved
 
 
