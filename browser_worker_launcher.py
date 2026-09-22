@@ -45,6 +45,15 @@ from ai_os_context.replay import replay as canonical_replay
 GEMINI = "https://gemini.google.com/app"
 WORKER_DOC = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/blob/main/WORKER.md"
 BROWSER_DOC = "https://github.com/GK-studio-JP/browser-agent/blob/main/BROWSER_AGENT_INSTRUCTIONS.md"
+GEMINI_TRANSIENT_ERRORS = (
+    "I encountered an error doing what you asked",
+    "I'm having a hard time fulfilling your request",
+    "Sorry, something went wrong. Please try your request again.",
+)
+
+
+def _is_gemini_transient_error(text: str) -> bool:
+    return any(marker in text for marker in GEMINI_TRANSIENT_ERRORS)
 
 
 def _balanced_json_objects(text: str) -> list[str]:
@@ -300,10 +309,6 @@ def _find(
 
 
 def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, Any]:
-    transient_errors = (
-        "I encountered an error doing what you asked",
-        "I'm having a hard time fulfilling your request",
-    )
     attempt_prompt = prompt_text
     for attempt in range(2):
         relay.command("switchPage", {"index": gemini_index})
@@ -333,7 +338,7 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
             commands = _commands(text)
             if stopped and len(commands) > baseline:
                 return commands[-1]
-            if stopped and any(marker in text for marker in transient_errors):
+            if stopped and _is_gemini_transient_error(text):
                 retryable_error = True
                 break
 
