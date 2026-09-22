@@ -21,7 +21,9 @@ from ai_os_browser_worker.navigation_policy import (
 from browser_worker_launcher import (
     GEMINI_RESPONSE_TIMEOUT_SECONDS,
     LauncherError,
+    _has_new_gemini_response,
     _is_gemini_transient_error,
+    ask_gemini,
     _task_payload_from_issue,
     canonical_claim_present,
     canonical_result_present,
@@ -111,6 +113,83 @@ class GeminiTransientErrorTests(unittest.TestCase):
     def test_response_timeout_is_bounded_and_long_enough(self):
         self.assertGreaterEqual(GEMINI_RESPONSE_TIMEOUT_SECONDS, 90)
         self.assertLessEqual(GEMINI_RESPONSE_TIMEOUT_SECONDS, 180)
+
+    def test_detects_new_gemini_response_marker(self):
+        self.assertTrue(
+            _has_new_gemini_response(
+                "prompt text",
+                'prompt text Gemini said {"kind":"browser_action"',
+            )
+        )
+        self.assertFalse(
+            _has_new_gemini_response(
+                "Gemini said old response",
+                "Gemini said old response",
+            )
+        )
+
+    def test_malformed_response_retries_once_with_strict_json_instruction(self):
+        class FakeRelay:
+            def __init__(self):
+                self.fills = []
+                self.pages = [
+                    {
+                        "pageText": "",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g1-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "pageText": (
+                            'TASK Gemini said {"kind":"browser_action",'
+                            '"action":"fill","args":{"value":"unterminated"'
+                        ),
+                        "elements": [],
+                    },
+                    {
+                        "pageText": "",
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK RETRY",
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g2-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "pageText": (
+                            'TASK RETRY Gemini said '
+                            '{"kind":"wait","reason":"retry-ok"}'
+                        ),
+                        "elements": [],
+                    },
+                ]
+
+            def command(self, action, args):
+                if action == "getPage":
+                    return self.pages.pop(0)
+                if action == "fill":
+                    self.fills.append(args["text"])
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 1, "TASK")
+
+        self.assertEqual(result, {"kind": "wait", "reason": "retry-ok"})
+        self.assertEqual(len(relay.fills), 2)
+        self.assertIn("not valid parseable JSON", relay.fills[1])
+        self.assertIn("Escape quotes and backslashes", relay.fills[1])
 
 
 class PlanTests(unittest.TestCase):
