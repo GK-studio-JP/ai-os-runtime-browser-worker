@@ -236,6 +236,107 @@ def _element_for_action(
     )
 
 
+def _semantic_element_args(
+    action: str,
+    args: dict[str, Any],
+    observation: dict[str, Any],
+) -> dict[str, Any]:
+    if args.get("elementId") or args.get("id"):
+        return dict(args)
+
+    generation = observation.get("generation")
+    if generation is None:
+        raise LauncherError("semantic element resolution requires a current generation")
+
+    roles = {"textbox"} if action == "fill" else {"link", "button", "radio"}
+    candidates = [
+        element
+        for element in observation.get("elements") or []
+        if element.get("role") in roles
+        and str(element.get("id") or "").startswith(f"g{generation}-")
+    ]
+
+    field = str(args.get("field") or "").strip().lower().replace("-", "_")
+    target = str(args.get("label") or args.get("target") or "").strip()
+
+    if action == "fill" and field:
+        if field in {"file_name", "filename"}:
+            candidates = [
+                element
+                for element in candidates
+                if str(element.get("label") or "").strip().lower() == "file name"
+            ]
+        elif field in {"file_contents", "contents", "content", "source"}:
+            candidates = [
+                element
+                for element in candidates
+                if str(element.get("label") or "").lower().startswith(
+                    "editing file contents"
+                )
+            ]
+        elif field in {"commit_message", "message"}:
+            candidates = [
+                element
+                for element in candidates
+                if str(element.get("label") or "").strip().lower() == "commit message"
+            ]
+        else:
+            raise LauncherError(f"unsupported semantic fill field: {field!r}")
+    elif target:
+        lowered = target.lower()
+        candidates = [
+            element
+            for element in candidates
+            if str(element.get("label") or "").strip().lower() == lowered
+            or str(element.get("text") or "").strip().lower() == lowered
+        ]
+    elif action == "fill":
+        text = args.get("text")
+        if not isinstance(text, str):
+            raise LauncherError("model fill requires text")
+        parsed = urllib.parse.urlparse(str(observation.get("url") or ""))
+        path = parsed.path or ""
+        if "/new/" in path and re.fullmatch(
+            r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+",
+            text.strip(),
+        ):
+            candidates = [
+                element
+                for element in candidates
+                if str(element.get("label") or "").strip().lower() == "file name"
+            ]
+        elif "/new/" in path or "/edit/" in path:
+            candidates = [
+                element
+                for element in candidates
+                if str(element.get("label") or "").lower().startswith(
+                    "editing file contents"
+                )
+            ]
+        else:
+            raise LauncherError(
+                "model fill without elementId requires a supported semantic field"
+            )
+    else:
+        raise LauncherError(
+            f"model {action} without elementId requires label or target"
+        )
+
+    if len(candidates) != 1:
+        descriptor = field or target or "inferred target"
+        raise LauncherError(
+            f"semantic {action} target {descriptor!r} resolved to "
+            f"{len(candidates)} current-generation elements"
+        )
+
+    resolved = dict(args)
+    resolved["elementId"] = candidates[0]["id"]
+    resolved.pop("field", None)
+    resolved.pop("label", None)
+    resolved.pop("target", None)
+    return resolved
+
+
 def _validate_model_action(
     command: dict[str, Any],
     observation: dict[str, Any],
@@ -265,6 +366,7 @@ def _validate_model_action(
 
     element: dict[str, Any] | None = None
     if action in {"click", "fill"}:
+        args = _semantic_element_args(action, args, observation)
         if "elementId" not in args and "id" in args:
             args["elementId"] = args["id"]
         args.pop("id", None)
