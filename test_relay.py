@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from ai_os_browser_worker.navigation_policy import LauncherError
-from ai_os_browser_worker.relay import Relay
+from ai_os_browser_worker.relay import Relay, _transient_relay_error
 
 
 class ScriptedRelay(Relay):
@@ -49,6 +49,34 @@ class RelayRetryTests(unittest.TestCase):
         self.assertEqual(result["url"], "https://example.test")
         posts = [call for call in relay.calls if call[0] == "POST"]
         self.assertEqual(len(posts), 2)
+
+    def test_read_operation_timeout_is_transient(self):
+        self.assertTrue(
+            _transient_relay_error(
+                "HTTP failure for GET relay: The read operation timed out"
+            )
+        )
+
+    @patch("ai_os_browser_worker.relay.time.sleep", return_value=None)
+    def test_command_with_receipt_retries_transient_poll_without_reposting(self, _sleep):
+        relay = ScriptedRelay([
+            LauncherError("HTTP failure for GET relay: The read operation timed out"),
+            [{"status": "done", "result": {"generation": 9}}],
+        ])
+
+        result, receipt = relay.command_with_receipt(
+            "fill",
+            {"elementId": "g1-e1", "text": "x"},
+            run_id="run-1",
+            step=1,
+        )
+
+        self.assertEqual(result, {"generation": 9})
+        self.assertEqual(receipt["status"], "success")
+        posts = [call for call in relay.calls if call[0] == "POST"]
+        gets = [call for call in relay.calls if call[0] == "GET"]
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(len(gets), 2)
 
     @patch("ai_os_browser_worker.relay.time.sleep", return_value=None)
     def test_mutating_fill_does_not_retry_transient_error(self, _sleep):

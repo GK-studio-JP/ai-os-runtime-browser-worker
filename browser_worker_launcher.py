@@ -50,6 +50,7 @@ GEMINI_TRANSIENT_ERRORS = (
     "I'm having a hard time fulfilling your request",
     "Sorry, something went wrong. Please try your request again.",
 )
+GEMINI_RESPONSE_TIMEOUT_SECONDS = 90
 
 
 def _is_gemini_transient_error(text: str) -> bool:
@@ -328,7 +329,7 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
             raise LauncherError("Gemini send button unavailable")
         relay.command("click", {"elementId": send["id"]})
 
-        end = time.monotonic() + 45
+        end = time.monotonic() + GEMINI_RESPONSE_TIMEOUT_SECONDS
         retryable_error = False
         while time.monotonic() < end:
             time.sleep(1.5)

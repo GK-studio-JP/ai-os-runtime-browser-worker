@@ -19,6 +19,7 @@ from ai_os_browser_worker.navigation_policy import (
     validate_mutation_receipt,
 )
 from browser_worker_launcher import (
+    GEMINI_RESPONSE_TIMEOUT_SECONDS,
     LauncherError,
     _is_gemini_transient_error,
     _task_payload_from_issue,
@@ -106,6 +107,10 @@ class GeminiTransientErrorTests(unittest.TestCase):
                 'Gemini said {"kind":"wait","reason":"still working"}'
             )
         )
+
+    def test_response_timeout_is_bounded_and_long_enough(self):
+        self.assertGreaterEqual(GEMINI_RESPONSE_TIMEOUT_SECONDS, 90)
+        self.assertLessEqual(GEMINI_RESPONSE_TIMEOUT_SECONDS, 180)
 
 
 class PlanTests(unittest.TestCase):
