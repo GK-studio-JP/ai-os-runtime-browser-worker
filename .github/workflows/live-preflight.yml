@@ -24,9 +24,9 @@ jobs:
     timeout-minutes: 15
     env:
       GITHUB_TOKEN: ${{ github.token }}
-      AI_OS_CONTEXT_SHA: 6b03b3e41995043e78faa1081d94973336aca86a
-      AI_OS_SCHEDULER_SHA: 7e1df073fda8de08254c3fa9cefa27ec1b2708f2
-      AI_OS_KERNEL_SHA: 7b8040b0690838d025c2b336c544c274f1e1db40
+      AI_OS_CONTEXT_SHA: bbfa99c928c2130470c851829cea8b5cccefb09f
+      AI_OS_SCHEDULER_SHA: 34c8f1481b989b4044d1bbd9f1c123c38f8d53ed
+      AI_OS_KERNEL_SHA: d4f33a54cdf1a733a98fc2dcb64520a8a5f0d6ac
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -73,6 +73,7 @@ jobs:
               shutil.copyfile(Path("projection")/c["capsule"],out/"capsule.json")
               boot["dispatch"]=d
               boot["capsule"]={"path":"capsule.json","fingerprint":c["fingerprint"],
+                               "content_digest":c.get("content_digest"),
                                "through_comment_id":c.get("through_comment_id")}
           (out/"boot.json").write_text(json.dumps(boot,indent=2,sort_keys=True)+"\n")
           PY
