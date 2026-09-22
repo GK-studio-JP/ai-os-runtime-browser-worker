@@ -50,10 +50,16 @@ GEMINI_TRANSIENT_ERRORS = (
     "I'm having a hard time fulfilling your request",
     "Sorry, something went wrong. Please try your request again.",
 )
+GEMINI_WEB_SEARCH_MARKER = "Searching the web"
+GEMINI_WEB_SEARCH_RETRY_POLLS = 8
 
 
 def _is_gemini_transient_error(text: str) -> bool:
     return any(marker in text for marker in GEMINI_TRANSIENT_ERRORS)
+
+
+def _gemini_web_search_active(text: str) -> bool:
+    return GEMINI_WEB_SEARCH_MARKER in text
 
 
 def _balanced_json_objects(text: str) -> list[str]:
@@ -330,6 +336,7 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
 
         end = time.monotonic() + 45
         retryable_error = False
+        web_search_polls = 0
         while time.monotonic() < end:
             time.sleep(1.5)
             page = relay.command("getPage", {})
@@ -338,6 +345,13 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
             commands = _commands(text)
             if stopped and len(commands) > baseline:
                 return commands[-1]
+            if _gemini_web_search_active(text):
+                web_search_polls += 1
+            else:
+                web_search_polls = 0
+            if web_search_polls >= GEMINI_WEB_SEARCH_RETRY_POLLS:
+                retryable_error = True
+                break
             if stopped and _is_gemini_transient_error(text):
                 retryable_error = True
                 break
@@ -345,8 +359,8 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
         if attempt == 0 and retryable_error:
             attempt_prompt = (
                 prompt_text
-                + "\nRETRY: Do not use Gemini web search or external tools. "
-                "Use only TASK, OBSERVED, and OBSERVATION. Return one JSON object."
+                + "\nRETRY: Web search is forbidden for this task. Do not search or use external tools. "
+                "Use only TASK, OBSERVED, and OBSERVATION, and return the next JSON command immediately."
             )
             continue
         if retryable_error:
