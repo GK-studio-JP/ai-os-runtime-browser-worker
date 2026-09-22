@@ -27,6 +27,7 @@ from browser_worker_launcher import (
     ensure_canonical_lease,
     extract_model_command,
     protocol_event_body,
+    prompt,
     reduce_observation,
 )
 
@@ -907,6 +908,77 @@ class FinishEvidenceTests(unittest.TestCase):
         )
         self.assertIn("file existence was not verified", rejection)
 
+    def test_rejects_change_task_without_implementation_artifact(self):
+        task_payload = {
+            "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
+            "objective": "Add a deterministic Runtime drift guard.",
+            "acceptance": [
+                "The guard runs in GitHub Actions and records workflow evidence.",
+            ],
+            "contracts": [
+                "Canonical runtime source: GK-studio-JP/ai-os-runtime@" + self.sha,
+            ],
+        }
+        canonical_url = (
+            "https://github.com/GK-studio-JP/ai-os-runtime/commit/" + self.sha
+        )
+        ledger = [
+            {"url": canonical_url, "pageText": self.sha},
+            {
+                "url": "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker",
+                "pageText": "repository",
+            },
+        ]
+        command = {
+            "kind": "finish",
+            "summary": "Inspected the repository.",
+            "artifacts": [self.sha],
+            "evidence": [{"kind": "extracted_fact", "value": self.sha}],
+        }
+        rejection = validate_finish_evidence(
+            command, ledger, task_payload, self.issue
+        )
+        self.assertIn("implementation task requires", rejection)
+
+    def test_accepts_change_task_with_pr_and_workflow_evidence(self):
+        task_payload = {
+            "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
+            "objective": "Add a deterministic Runtime drift guard.",
+            "acceptance": [
+                "The guard runs in GitHub Actions and records workflow evidence.",
+            ],
+            "contracts": [
+                "Canonical runtime source: GK-studio-JP/ai-os-runtime@" + self.sha,
+            ],
+        }
+        canonical_url = (
+            "https://github.com/GK-studio-JP/ai-os-runtime/commit/" + self.sha
+        )
+        pr_url = (
+            "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/pull/123"
+        )
+        run_url = (
+            "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/actions/runs/456"
+        )
+        ledger = [
+            {"url": canonical_url, "pageText": self.sha},
+            {"url": pr_url, "pageText": "Pull request 123"},
+            {"url": run_url, "pageText": "workflow success"},
+        ]
+        command = {
+            "kind": "finish",
+            "summary": "Added and verified the deterministic Runtime drift guard.",
+            "artifacts": [self.sha, pr_url, run_url],
+            "evidence": [
+                {"kind": "extracted_fact", "value": self.sha},
+                {"kind": "visited_url", "value": pr_url},
+                {"kind": "visited_url", "value": run_url},
+            ],
+        }
+        self.assertIsNone(
+            validate_finish_evidence(command, ledger, task_payload, self.issue)
+        )
+
     def test_task_payload_parses_canonical_task_marker(self):
         body = (
             "<!-- ai-os-task:v1 -->\n"
@@ -954,6 +1026,70 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(reduced["pageText"], "x" * 10)
         self.assertEqual(len(reduced["elements"]), 2)
         self.assertNotIn("extra", reduced["elements"][0])
+
+    def test_reduce_observation_prioritizes_editor_controls(self):
+        page = {
+            "url": "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/edit/main/runtime.py",
+            "generation": 8,
+            "pageText": "source",
+            "elements": [
+                *[
+                    {
+                        "id": f"g8-e{i}",
+                        "role": "link",
+                        "text": f"link-{i}",
+                        "attributes": {"href": f"/path/{i}"},
+                    }
+                    for i in range(20)
+                ],
+                {
+                    "id": "g8-e99",
+                    "role": "textbox",
+                    "label": "Editing runtime.py file contents",
+                    "editable": True,
+                    "text": "code",
+                },
+                {
+                    "id": "g8-e100",
+                    "role": "radio",
+                    "label": "Create a new branch for this commit",
+                    "states": {"checked": False},
+                },
+            ],
+        }
+        reduced = reduce_observation(page, max_elements=4)
+        self.assertEqual(reduced["elements"][0]["id"], "g8-e99")
+        self.assertEqual(reduced["elements"][1]["id"], "g8-e100")
+
+    def test_prompt_is_compact_and_carries_mutation_contract(self):
+        task_payload = {
+            "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
+            "objective": "Self-improvement test: add a deterministic guard.",
+            "acceptance": ["The guard runs in GitHub Actions with workflow evidence."],
+            "contracts": ["Canonical runtime source: GK-studio-JP/ai-os-runtime@abc123"],
+            "context_refs": ["https://github.com/GK-studio-JP/ai-os-runtime/commit/abc123"],
+        }
+        text = prompt(
+            "browser-chat-gemini-test",
+            "#16",
+            "https://github.com/GK-studio-JP/ai-bulletin-board/issues/16",
+            {
+                "url": "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker",
+                "generation": 8,
+                "pageText": "repository",
+                "elements": [],
+                "dialogs": [],
+            },
+            1,
+            "ready",
+            True,
+            task_payload,
+            [],
+            True,
+        )
+        self.assertLess(len(text), 7000)
+        self.assertIn('"contracts":["Canonical runtime source:', text)
+        self.assertIn("perform the smallest authorized branch/PR mutation", text)
 
 
 if __name__ == "__main__":

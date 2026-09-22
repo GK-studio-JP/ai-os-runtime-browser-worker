@@ -179,8 +179,8 @@ def _record_page_evidence(ledger: list[dict[str, Any]], page: dict[str, Any]) ->
 def reduce_observation(
     page: dict[str, Any],
     *,
-    max_text: int = 1800,
-    max_elements: int = 28,
+    max_text: int = 700,
+    max_elements: int = 14,
 ) -> dict[str, Any]:
     keys = (
         "id",
@@ -195,8 +195,25 @@ def reduce_observation(
         for element in (page.get("elements") or [])
         if element.get("editable") or element.get("role") in useful_roles
     ]
+    priority_roles = {"textbox", "radio", "checkbox", "combobox"}
+    priority = [
+        element
+        for element in useful
+        if element.get("editable") or element.get("role") in priority_roles
+    ]
+    secondary = [
+        element
+        for element in useful
+        if element not in priority and element.get("role") == "button"
+    ]
+    navigation = [
+        element
+        for element in useful
+        if element not in priority and element not in secondary
+    ]
+    selected = (priority + secondary + navigation)[:max_elements]
     elements = []
-    for element in useful[:max_elements]:
+    for element in selected:
         compact = {
             key: element.get(key)
             for key in keys
@@ -208,8 +225,8 @@ def reduce_observation(
             compact["href"] = href
         for key in ("text", "label", "value"):
             value = compact.get(key)
-            if isinstance(value, str) and len(value) > 160:
-                compact[key] = value[:160]
+            if isinstance(value, str) and len(value) > 120:
+                compact[key] = value[:120]
         elements.append(compact)
     return {
         "url": page.get("url"),
@@ -277,7 +294,7 @@ def prompt(
     ledger: list[dict[str, Any]],
     mutation_enabled: bool,
 ) -> str:
-    claim_state = "verified" if claimed else "not verified"
+    claim_state = "verified" if claimed else "not-verified"
     repository = _task_repository(task_payload)
     current_main_evidence_url = (
         _main_head_evidence_url(repository)
@@ -288,6 +305,7 @@ def prompt(
         "repository": task_payload.get("repository"),
         "objective": task_payload.get("objective"),
         "acceptance": task_payload.get("acceptance"),
+        "contracts": task_payload.get("contracts"),
         "context_refs": task_payload.get("context_refs"),
         "current_main_evidence_url": current_main_evidence_url,
     }
@@ -302,54 +320,38 @@ def prompt(
             if sha not in evidence_shas:
                 evidence_shas.append(sha)
     evidence_context = {
-        "visited_urls": evidence_urls[-8:],
-        "observed_full_shas": evidence_shas[-8:],
+        "visited_urls": evidence_urls[-5:],
+        "observed_full_shas": evidence_shas[-5:],
     }
     if mutation_enabled:
         mutation_policy = (
-            "A Kernel-bound branch/PR mutation receipt is active. "
-            "You may use fill on current-generation textboxes and approved commit/PR controls "
-            "only inside the task repository. Never commit directly to main, never merge a PR, "
-            "and never use Settings or destructive controls. On the first source mutation from "
-            "main, select 'Create a new branch for this commit and start a pull request'. "
-            "Subsequent commits may target that non-main branch."
+            "Kernel branch/PR receipt active: fill/click only in the task repo. "
+            "Never commit to main or merge. First source change from main must use a new branch and PR."
         )
         action_contract = (
             '{"kind":"browser_action","action":"goto|getPage|click|fill|scroll|setViewport",'
             '"args":{...},"reason":"..."}'
         )
     else:
-        mutation_policy = (
-            "Model-driven browser mutation is disabled because no valid Kernel capability "
-            "receipt is present. click is allowed only for current-generation navigation links "
-            "inside the task repository."
-        )
+        mutation_policy = "No mutation receipt: read-only navigation only."
         action_contract = (
             '{"kind":"browser_action","action":"goto|getPage|click|scroll|setViewport",'
             '"args":{...},"reason":"..."}'
         )
 
-    return f"""Control the Browser Agent for {task}. Canonical Issue: {issue}
-Run: {agent}. CLAIM: {claim_state}. The launcher writes CLAIM/RESULT; do not write those comments yourself.
-The task definition is supplied below on every turn. After CLAIM is verified, do not return to the canonical Issue merely to reread the task. Continue verification from the current task page.
-If TASK.current_main_evidence_url is present, visit that exact URL and use its top-level "sha" as the current main HEAD. A /commit/<sha> detail page alone does not prove current main.
-Do only the supplied task, use only current-generation element IDs, and never expose secrets.
-TASK:
-{json.dumps(task_context, ensure_ascii=False, separators=(",", ":"))}
-EVIDENCE ALREADY OBSERVED BY THE LAUNCHER:
-{json.dumps(evidence_context, ensure_ascii=False, separators=(",", ":"))}
-If the evidence above already proves every acceptance item, return finish now instead of revisiting pages.
-Mutation policy: {mutation_policy}
-Return exactly one JSON object, no prose:
+    return f"""Browser Agent task {task}. Issue={issue}. Run={agent}. CLAIM={claim_state}.
+TASK={json.dumps(task_context, ensure_ascii=False, separators=(",", ":"))}
+OBSERVED={json.dumps(evidence_context, ensure_ascii=False, separators=(",", ":"))}
+POLICY={mutation_policy}
+Rules: current-generation IDs only; never expose secrets; evidence must come from observed task pages.
+If objective/acceptance asks to add, implement, fix, update, or change something and observed pages do not already prove it exists, perform the smallest authorized branch/PR mutation before finish. README/repository listings/unrelated PRs are not implementation evidence.
+If current_main_evidence_url is present, visit it and use its top-level sha.
+Return one JSON object only:
 {action_contract}
-For click/fill use args={{"elementId":"gN-eM", ...}} and only current-generation IDs.
-or {{"kind":"finish","summary":"what was verified","artifacts":["immutable artifact"],"evidence":[{{"kind":"visited_url","value":"https://..."}},{{"kind":"extracted_fact","value":"observed fact"}}],"reason":"done"}}
-Evidence must come from pages actually observed in the task browser, not from the Issue text or Gemini. If the task asks for a current commit SHA, put the full 40-character SHA in artifacts and evidence. If it asks whether a file exists, actually visit that file before finish.
+or {{"kind":"finish","summary":"verified result","artifacts":["immutable artifact"],"evidence":[{{"kind":"visited_url","value":"https://..."}},{{"kind":"extracted_fact","value":"observed fact"}}],"reason":"done"}}
 or {{"kind":"wait","reason":"..."}}
-Step {step}. Feedback: {feedback}
-OBSERVATION:
-{json.dumps(observation, ensure_ascii=False, separators=(",", ":"))}"""
-
+Step={step}; feedback={feedback}
+OBSERVATION={json.dumps(observation, ensure_ascii=False, separators=(",", ":"))}"""
 
 def comments(token: str | None, issue: int) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
