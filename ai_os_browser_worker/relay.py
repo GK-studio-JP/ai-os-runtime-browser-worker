@@ -27,7 +27,7 @@ def _request(
         h["Content-Type"] = "application/json"
     try:
         req = urllib.request.Request(url, data=body, headers=h, method=method)
-        with urllib.request.urlopen(req, timeout=60) as response:
+        with urllib.request.urlopen(req, timeout=10) as response:
             return response.read()
     except Exception as exc:
         raise LauncherError(f"HTTP failure for {method} {url}: {exc}") from exc
@@ -49,6 +49,8 @@ TRANSIENT_RELAY_ERROR_MARKERS = (
     "supabase 504",
     "504 gateway timeout",
     "http error 504",
+    "the read operation timed out",
+    "read operation timed out",
 )
 
 
@@ -203,11 +205,19 @@ class Relay:
             "return=representation",
         )
         end = time.monotonic() + timeout
+        last_transient_error = ""
         while time.monotonic() < end:
-            rows = self.rest(
-                "GET",
-                f"browser_relay_commands?session_id=eq.{self.session}&command_id=eq.{command_id}&select=status,result,error&limit=1",
-            ) or []
+            try:
+                rows = self.rest(
+                    "GET",
+                    f"browser_relay_commands?session_id=eq.{self.session}&command_id=eq.{command_id}&select=status,result,error&limit=1",
+                ) or []
+            except LauncherError as exc:
+                if _transient_relay_error(str(exc)):
+                    last_transient_error = str(exc)
+                    time.sleep(0.5)
+                    continue
+                raise
             row = rows[0] if rows else {}
             if row.get("status") == "done":
                 result = row.get("result")
@@ -238,6 +248,9 @@ class Relay:
                 )
             time.sleep(0.5)
 
+        timeout_error = "timeout"
+        if last_transient_error:
+            timeout_error += f" after transient relay failure: {last_transient_error}"
         receipt = make_tool_receipt(
             run_id=run_id,
             step=step,
@@ -245,9 +258,14 @@ class Relay:
             tool=action,
             status="error",
             args=command_args,
-            output={"error": "timeout"},
+            output={"error": timeout_error},
         )
         raise RelayCommandError(
-            f"Browser Agent {action} timed out",
+            f"Browser Agent {action} timed out"
+            + (
+                f" after transient relay failure: {last_transient_error}"
+                if last_transient_error
+                else ""
+            ),
             receipt,
         )
