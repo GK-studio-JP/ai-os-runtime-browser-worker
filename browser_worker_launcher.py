@@ -305,6 +305,7 @@ def prompt(
         "repository": task_payload.get("repository"),
         "objective": task_payload.get("objective"),
         "acceptance": task_payload.get("acceptance"),
+        "contracts": task_payload.get("contracts"),
         "context_refs": task_payload.get("context_refs"),
         "current_main_evidence_url": current_main_evidence_url,
     }
