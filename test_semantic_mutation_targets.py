@@ -62,6 +62,17 @@ class SemanticMutationTargetTests(unittest.TestCase):
             {"elementId": "g7-e20", "text": "print('guard')\n"},
         )
 
+    def test_normalizes_value_alias_for_explicit_fill_field(self):
+        args = _semantic_element_args(
+            "fill",
+            {"field": "file_name", "value": "test_contract_drift.py"},
+            self.new_file_page,
+        )
+        self.assertEqual(
+            args,
+            {"elementId": "g7-e10", "text": "test_contract_drift.py"},
+        )
+
     def test_infers_filename_from_new_file_fill(self):
         args = _semantic_element_args(
             "fill",
