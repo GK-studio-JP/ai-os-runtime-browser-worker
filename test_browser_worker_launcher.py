@@ -976,8 +976,128 @@ class FinishEvidenceTests(unittest.TestCase):
             ],
         }
         self.assertIsNone(
-            validate_finish_evidence(command, ledger, task_payload, self.issue)
+            validate_finish_evidence(
+                command,
+                ledger,
+                task_payload,
+                self.issue,
+                source_mutation_performed=True,
+                require_new_pr=True,
+                preexisting_pull_urls=set(),
+                preexisting_workflow_urls=set(),
+            )
         )
+
+    def test_rejects_finish_without_source_mutation_for_branch_pr_task(self):
+        task_payload = {
+            "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
+            "objective": "Add a deterministic Runtime drift guard.",
+            "acceptance": ["The guard runs in GitHub Actions with workflow evidence."],
+            "contracts": [
+                "Canonical runtime source: GK-studio-JP/ai-os-runtime@" + self.sha,
+            ],
+        }
+        pr_url = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/pull/123"
+        run_url = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/actions/runs/456"
+        ledger = [
+            {"url": "https://github.com/GK-studio-JP/ai-os-runtime/commit/" + self.sha, "pageText": self.sha},
+            {"url": pr_url, "pageText": "Pull request 123"},
+            {"url": run_url, "pageText": "workflow success"},
+        ]
+        command = {
+            "kind": "finish",
+            "summary": "Added and verified the deterministic Runtime drift guard.",
+            "artifacts": [self.sha, pr_url, run_url],
+            "evidence": [
+                {"kind": "extracted_fact", "value": self.sha},
+                {"kind": "visited_url", "value": pr_url},
+                {"kind": "visited_url", "value": run_url},
+            ],
+        }
+        rejection = validate_finish_evidence(
+            command,
+            ledger,
+            task_payload,
+            self.issue,
+            source_mutation_performed=False,
+            require_new_pr=True,
+        )
+        self.assertIn("source-file mutation", rejection)
+
+    def test_rejects_preexisting_pull_request_evidence(self):
+        task_payload = {
+            "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
+            "objective": "Add a deterministic Runtime drift guard.",
+            "acceptance": ["The guard runs in GitHub Actions with workflow evidence."],
+            "contracts": [
+                "Canonical runtime source: GK-studio-JP/ai-os-runtime@" + self.sha,
+            ],
+        }
+        pr_url = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/pull/15"
+        run_url = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/actions/runs/456"
+        ledger = [
+            {"url": "https://github.com/GK-studio-JP/ai-os-runtime/commit/" + self.sha, "pageText": self.sha},
+            {"url": pr_url, "pageText": "unrelated pre-existing pull request"},
+            {"url": run_url, "pageText": "workflow success"},
+        ]
+        command = {
+            "kind": "finish",
+            "summary": "Added and verified the deterministic Runtime drift guard.",
+            "artifacts": [self.sha, pr_url, run_url],
+            "evidence": [
+                {"kind": "extracted_fact", "value": self.sha},
+                {"kind": "visited_url", "value": pr_url},
+                {"kind": "visited_url", "value": run_url},
+            ],
+        }
+        rejection = validate_finish_evidence(
+            command,
+            ledger,
+            task_payload,
+            self.issue,
+            source_mutation_performed=True,
+            require_new_pr=True,
+            preexisting_pull_urls={pr_url},
+        )
+        self.assertIn("predated this worker run", rejection)
+
+    def test_rejects_preexisting_workflow_evidence(self):
+        task_payload = {
+            "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
+            "objective": "Add a deterministic Runtime drift guard.",
+            "acceptance": ["The guard runs in GitHub Actions with workflow evidence."],
+            "contracts": [
+                "Canonical runtime source: GK-studio-JP/ai-os-runtime@" + self.sha,
+            ],
+        }
+        pr_url = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/pull/123"
+        run_url = "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/actions/runs/456"
+        ledger = [
+            {"url": "https://github.com/GK-studio-JP/ai-os-runtime/commit/" + self.sha, "pageText": self.sha},
+            {"url": pr_url, "pageText": "Pull request 123"},
+            {"url": run_url, "pageText": "workflow success"},
+        ]
+        command = {
+            "kind": "finish",
+            "summary": "Added and verified the deterministic Runtime drift guard.",
+            "artifacts": [self.sha, pr_url, run_url],
+            "evidence": [
+                {"kind": "extracted_fact", "value": self.sha},
+                {"kind": "visited_url", "value": pr_url},
+                {"kind": "visited_url", "value": run_url},
+            ],
+        }
+        rejection = validate_finish_evidence(
+            command,
+            ledger,
+            task_payload,
+            self.issue,
+            source_mutation_performed=True,
+            require_new_pr=True,
+            preexisting_pull_urls=set(),
+            preexisting_workflow_urls={run_url},
+        )
+        self.assertIn("workflow evidence reused", rejection)
 
     def test_task_payload_parses_canonical_task_marker(self):
         body = (
@@ -1090,6 +1210,9 @@ class ObservationTests(unittest.TestCase):
         self.assertLess(len(text), 7000)
         self.assertIn('"contracts":["Canonical runtime source:', text)
         self.assertIn("perform the smallest authorized branch/PR mutation", text)
+        self.assertIn('"source_mutation_performed":false', text)
+        self.assertIn("do not browse /pulls first", text)
+        self.assertIn("exact observed 40-character SHA alone", text)
 
 
 if __name__ == "__main__":
