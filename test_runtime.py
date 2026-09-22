@@ -212,6 +212,16 @@ class RuntimeTests(unittest.TestCase):
                 timeout_seconds=5,
             )
 
+    def test_subprocess_driver_rejects_excessive_stdout(self):
+        adapter = "import sys;sys.stdout.write('x' * 2048)"
+        with self.assertRaisesRegex(ValueError, "stdout exceeds"):
+            run_driver(
+                worker_invocation(),
+                [sys.executable, "-c", adapter],
+                timeout_seconds=5,
+                max_output_bytes=1024,
+            )
+
     def test_subprocess_driver_does_not_echo_stderr(self):
         adapter = "import sys;sys.stderr.write('TOP_SECRET');raise SystemExit(7)"
         with self.assertRaises(RuntimeError) as ctx:
