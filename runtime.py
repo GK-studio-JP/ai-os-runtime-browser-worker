@@ -6,6 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from execution_budget import (
+    execution_budget_from_invocation,
+    normalize_execution_budget,
+    requires_execution_usage,
+    validate_result_against_budget,
+)
+
 BOOT_SCHEMA = "ai-os-worker-boot:v1"
 CAPSULE_SCHEMA = "ai-os-context-capsule:v1"
 DISPATCH_SCHEMA = "ai-os-dispatch:v1"
@@ -201,6 +208,34 @@ def prepare(
     if not worker_id:
         raise ValueError("preflight worker_id is required")
 
+    execution_budget = None
+    dispatch_budget = dispatch.get("execution_budget")
+    if dispatch_budget is not None:
+        execution_budget = normalize_execution_budget(dispatch_budget)
+
+    result_required = [
+        "schema",
+        "invocation_fingerprint",
+        "worker_id",
+        "status",
+        "summary",
+        "next_action",
+        "artifacts",
+        "requests",
+    ]
+    instructions = [
+        "Use only the selected task and Context Capsule as default context.",
+        "Page in referenced sources when required; do not guess missing facts.",
+        "Do not mutate canonical coordination state directly.",
+        "Return one structured ai-os-worker-result:v1 object.",
+    ]
+    if execution_budget is not None and requires_execution_usage(execution_budget):
+        result_required.append("execution_usage")
+        instructions.append(
+            "Report ai-os-execution-usage:v1 for every active step, tool-call, "
+            "or token limit. Usage is non-authoritative execution accounting."
+        )
+
     invocation = {
         "schema": INVOCATION_SCHEMA,
         "authoritative": False,
@@ -221,24 +256,12 @@ def prepare(
         "result_contract": {
             "schema": RESULT_SCHEMA,
             "statuses": sorted(RESULT_STATUSES),
-            "required": [
-                "schema",
-                "invocation_fingerprint",
-                "worker_id",
-                "status",
-                "summary",
-                "next_action",
-                "artifacts",
-                "requests",
-            ],
+            "required": result_required,
         },
-        "instructions": [
-            "Use only the selected task and Context Capsule as default context.",
-            "Page in referenced sources when required; do not guess missing facts.",
-            "Do not mutate canonical coordination state directly.",
-            "Return one structured ai-os-worker-result:v1 object.",
-        ],
+        "instructions": instructions,
     }
+    if execution_budget is not None:
+        invocation["execution_budget"] = execution_budget
     invocation["fingerprint"] = _fingerprint(invocation)
     return invocation
 
@@ -252,6 +275,10 @@ def normalize(invocation: dict[str, Any], result: dict[str, Any]) -> dict[str, A
         raise ValueError("Worker result does not match invocation fingerprint")
     if result.get("worker_id") != invocation.get("worker_id"):
         raise ValueError("Worker result identity does not match invocation")
+
+    execution_budget = execution_budget_from_invocation(invocation)
+    execution_usage = validate_result_against_budget(invocation, result)
+
     status = result.get("status")
     if status not in RESULT_STATUSES:
         raise ValueError(f"unsupported Worker result status: {status!r}")
@@ -315,6 +342,10 @@ def normalize(invocation: dict[str, Any], result: dict[str, Any]) -> dict[str, A
             "event": event,
         },
     }
+    if execution_budget is not None:
+        outcome["execution_budget"] = execution_budget
+    if execution_usage is not None:
+        outcome["execution_usage"] = execution_usage
     outcome["fingerprint"] = _fingerprint(outcome)
     return outcome
 
