@@ -27,6 +27,7 @@ from browser_worker_launcher import (
     ensure_canonical_lease,
     extract_model_command,
     protocol_event_body,
+    prompt,
     reduce_observation,
 )
 
@@ -954,6 +955,70 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(reduced["pageText"], "x" * 10)
         self.assertEqual(len(reduced["elements"]), 2)
         self.assertNotIn("extra", reduced["elements"][0])
+
+    def test_reduce_observation_prioritizes_editor_controls(self):
+        page = {
+            "url": "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/edit/main/runtime.py",
+            "generation": 8,
+            "pageText": "source",
+            "elements": [
+                *[
+                    {
+                        "id": f"g8-e{i}",
+                        "role": "link",
+                        "text": f"link-{i}",
+                        "attributes": {"href": f"/path/{i}"},
+                    }
+                    for i in range(20)
+                ],
+                {
+                    "id": "g8-e99",
+                    "role": "textbox",
+                    "label": "Editing runtime.py file contents",
+                    "editable": True,
+                    "text": "code",
+                },
+                {
+                    "id": "g8-e100",
+                    "role": "radio",
+                    "label": "Create a new branch for this commit",
+                    "states": {"checked": False},
+                },
+            ],
+        }
+        reduced = reduce_observation(page, max_elements=4)
+        self.assertEqual(reduced["elements"][0]["id"], "g8-e99")
+        self.assertEqual(reduced["elements"][1]["id"], "g8-e100")
+
+    def test_prompt_is_compact_and_carries_mutation_contract(self):
+        task_payload = {
+            "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
+            "objective": "Self-improvement test: add a deterministic guard.",
+            "acceptance": ["The guard runs in GitHub Actions with workflow evidence."],
+            "contracts": ["Canonical runtime source: GK-studio-JP/ai-os-runtime@abc123"],
+            "context_refs": ["https://github.com/GK-studio-JP/ai-os-runtime/commit/abc123"],
+        }
+        text = prompt(
+            "browser-chat-gemini-test",
+            "#16",
+            "https://github.com/GK-studio-JP/ai-bulletin-board/issues/16",
+            {
+                "url": "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker",
+                "generation": 8,
+                "pageText": "repository",
+                "elements": [],
+                "dialogs": [],
+            },
+            1,
+            "ready",
+            True,
+            task_payload,
+            [],
+            True,
+        )
+        self.assertLess(len(text), 7000)
+        self.assertIn('"contracts":["Canonical runtime source:', text)
+        self.assertIn("perform the smallest authorized branch/PR mutation", text)
 
 
 if __name__ == "__main__":
