@@ -347,7 +347,10 @@ class ModelCommandTests(unittest.TestCase):
             ],
         }
         command = {"action": "click", "args": {"elementId": "g4-e20"}}
-        with self.assertRaisesRegex(LauncherError, "direct commit to main"):
+        with self.assertRaisesRegex(
+            LauncherError,
+            "Kernel receipt requires a new branch",
+        ):
             self.validate(command, observation, mutation_receipt())
 
         observation["elements"][1]["states"]["checked"] = False
@@ -356,6 +359,37 @@ class ModelCommandTests(unittest.TestCase):
             self.validate(command, observation, mutation_receipt())[0],
             "click",
         )
+
+    def test_commit_to_existing_feature_branch_is_denied(self):
+        observation = {
+            "generation": 4,
+            "url": self.repo_url + "/edit/feature/foo/README.md",
+            "elements": [
+                {
+                    "id": "g4-e20",
+                    "role": "button",
+                    "label": "Commit changes",
+                },
+                {
+                    "id": "g4-e21",
+                    "role": "radio",
+                    "label": "Commit directly to the feature/foo branch",
+                    "states": {"checked": True},
+                },
+                {
+                    "id": "g4-e22",
+                    "role": "radio",
+                    "label": "Create a new branch for this commit and start a pull request",
+                    "states": {"checked": False},
+                },
+            ],
+        }
+        command = {"action": "click", "args": {"elementId": "g4-e20"}}
+        with self.assertRaisesRegex(
+            LauncherError,
+            "Kernel receipt requires a new branch",
+        ):
+            self.validate(command, observation, mutation_receipt())
 
     def test_merge_control_is_denied_even_with_receipt(self):
         observation = {
