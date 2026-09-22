@@ -38,6 +38,25 @@ def _json(method: str, url: str, **kwargs: Any) -> Any:
     return json.loads(raw.decode()) if raw else None
 
 
+RETRYABLE_COMMAND_ACTIONS = {"getPage", "switchPage", "goto"}
+TRANSIENT_RELAY_ERROR_MARKERS = (
+    "supabase 502",
+    "502 bad gateway",
+    "http error 502",
+    "supabase 503",
+    "503 service unavailable",
+    "http error 503",
+    "supabase 504",
+    "504 gateway timeout",
+    "http error 504",
+)
+
+
+def _transient_relay_error(message: str) -> bool:
+    value = str(message or "").lower()
+    return any(marker in value for marker in TRANSIENT_RELAY_ERROR_MARKERS)
+
+
 class RelayCommandError(LauncherError):
     def __init__(self, message: str, receipt: dict[str, Any]):
         super().__init__(message)
@@ -84,31 +103,80 @@ class Relay:
         args: dict[str, Any] | None = None,
         timeout: int = 75,
     ) -> Any:
-        command_id = f"launcher-{uuid.uuid4().hex}"
-        self.rest(
-            "POST",
-            "browser_relay_commands",
-            {
-                "session_id": self.session,
-                "command_id": command_id,
-                "action": action,
-                "args": args or {},
-            },
-            "return=representation",
-        )
+        command_args = args or {}
+        max_attempts = 3 if action in RETRYABLE_COMMAND_ACTIONS else 1
         end = time.monotonic() + timeout
-        while time.monotonic() < end:
-            rows = self.rest(
-                "GET",
-                f"browser_relay_commands?session_id=eq.{self.session}&command_id=eq.{command_id}&select=status,result,error&limit=1",
-            ) or []
-            row = rows[0] if rows else {}
-            if row.get("status") == "done":
-                return row.get("result")
-            if row.get("status") == "error":
-                raise LauncherError(f"Browser Agent {action} failed: {row.get('error')}")
-            time.sleep(0.5)
-        raise LauncherError(f"Browser Agent {action} timed out")
+        last_transient_error = ""
+
+        for attempt in range(1, max_attempts + 1):
+            if time.monotonic() >= end:
+                break
+            command_id = f"launcher-{uuid.uuid4().hex}"
+            try:
+                self.rest(
+                    "POST",
+                    "browser_relay_commands",
+                    {
+                        "session_id": self.session,
+                        "command_id": command_id,
+                        "action": action,
+                        "args": command_args,
+                    },
+                    "return=representation",
+                )
+            except LauncherError as exc:
+                if (
+                    attempt < max_attempts
+                    and _transient_relay_error(str(exc))
+                ):
+                    last_transient_error = str(exc)
+                    time.sleep(0.5)
+                    continue
+                raise
+
+            retry = False
+            while time.monotonic() < end:
+                try:
+                    rows = self.rest(
+                        "GET",
+                        f"browser_relay_commands?session_id=eq.{self.session}&command_id=eq.{command_id}&select=status,result,error&limit=1",
+                    ) or []
+                except LauncherError as exc:
+                    if (
+                        attempt < max_attempts
+                        and _transient_relay_error(str(exc))
+                    ):
+                        last_transient_error = str(exc)
+                        retry = True
+                        break
+                    raise
+
+                row = rows[0] if rows else {}
+                if row.get("status") == "done":
+                    return row.get("result")
+                if row.get("status") == "error":
+                    error = str(row.get("error") or "")
+                    if (
+                        attempt < max_attempts
+                        and _transient_relay_error(error)
+                    ):
+                        last_transient_error = error
+                        retry = True
+                        break
+                    raise LauncherError(f"Browser Agent {action} failed: {error}")
+                time.sleep(0.5)
+
+            if retry:
+                time.sleep(0.5)
+                continue
+            break
+
+        suffix = (
+            f" after transient relay failure: {last_transient_error}"
+            if last_transient_error
+            else ""
+        )
+        raise LauncherError(f"Browser Agent {action} timed out{suffix}")
 
     def command_with_receipt(
         self,
