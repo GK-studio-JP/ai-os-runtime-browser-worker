@@ -300,30 +300,55 @@ def _find(
 
 
 def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, Any]:
-    relay.command("switchPage", {"index": gemini_index})
-    relay.command("goto", {"url": GEMINI})
-    page = relay.command("getPage", {})
-    if dismiss := _find(page, text="Not now"):
-        relay.command("click", {"elementId": dismiss["id"]})
+    transient_errors = (
+        "I encountered an error doing what you asked",
+        "I'm having a hard time fulfilling your request",
+    )
+    attempt_prompt = prompt_text
+    for attempt in range(2):
+        relay.command("switchPage", {"index": gemini_index})
+        relay.command("goto", {"url": GEMINI})
         page = relay.command("getPage", {})
-    box = _find(page, label="Enter a prompt for Gemini")
-    if not box:
-        raise LauncherError("Gemini prompt box unavailable")
-    relay.command("fill", {"elementId": box["id"], "text": prompt_text})
-    page = relay.command("getPage", {})
-    baseline = len(_commands(str(page.get("pageText") or "")))
-    send = _find(page, label="Send message")
-    if not send:
-        raise LauncherError("Gemini send button unavailable")
-    relay.command("click", {"elementId": send["id"]})
-    end = time.monotonic() + 90
-    while time.monotonic() < end:
-        time.sleep(1.5)
+        if dismiss := _find(page, text="Not now"):
+            relay.command("click", {"elementId": dismiss["id"]})
+            page = relay.command("getPage", {})
+        box = _find(page, label="Enter a prompt for Gemini")
+        if not box:
+            raise LauncherError("Gemini prompt box unavailable")
+        relay.command("fill", {"elementId": box["id"], "text": attempt_prompt})
         page = relay.command("getPage", {})
-        text = str(page.get("pageText") or "")
-        if not _find(page, label="Stop response") and len(_commands(text)) > baseline:
-            return _commands(text)[-1]
-    raise LauncherError("Gemini response timed out")
+        baseline = len(_commands(str(page.get("pageText") or "")))
+        send = _find(page, label="Send message")
+        if not send:
+            raise LauncherError("Gemini send button unavailable")
+        relay.command("click", {"elementId": send["id"]})
+
+        end = time.monotonic() + 45
+        retryable_error = False
+        while time.monotonic() < end:
+            time.sleep(1.5)
+            page = relay.command("getPage", {})
+            text = str(page.get("pageText") or "")
+            stopped = not _find(page, label="Stop response")
+            commands = _commands(text)
+            if stopped and len(commands) > baseline:
+                return commands[-1]
+            if stopped and any(marker in text for marker in transient_errors):
+                retryable_error = True
+                break
+
+        if attempt == 0 and retryable_error:
+            attempt_prompt = (
+                prompt_text
+                + "\nRETRY: Do not use Gemini web search or external tools. "
+                "Use only TASK, OBSERVED, and OBSERVATION. Return one JSON object."
+            )
+            continue
+        if retryable_error:
+            raise LauncherError("Gemini logged-out response failed after retry")
+        raise LauncherError("Gemini response timed out")
+
+    raise LauncherError("Gemini returned no launcher command")
 
 
 def prompt(
@@ -395,9 +420,10 @@ def prompt(
 TASK={json.dumps(task_context, ensure_ascii=False, separators=(",", ":"))}
 OBSERVED={json.dumps(evidence_context, ensure_ascii=False, separators=(",", ":"))}
 POLICY={mutation_policy}
-Rules: current-generation IDs only; never expose secrets; evidence must come from observed task pages.
+Rules: never expose secrets; evidence must come from observed task pages. Do not use Gemini web search or external tools; all required state is in this prompt.
+For click/fill, use the current-generation elementId exactly when possible. Never return click/fill with no target. For GitHub editor fill, if preserving elementId is difficult, args may use field="file_name", field="file_contents", or field="commit_message"; the Runtime resolves only one safe current-generation textbox. For a mutation click, args may use the exact visible label as label/target and the Runtime resolves only one current-generation allowed control.
 If objective/acceptance asks to add, implement, fix, update, or change something and observed pages do not already prove it exists, perform the smallest authorized branch/PR mutation before finish. README/repository listings/unrelated or pre-existing PRs are not implementation evidence.
-For GitHub implementation, do not browse /pulls first. Navigate directly to the edit URL for an existing path or the new-file URL from TASK.mutation_entry_hint, fill source content, choose the new-branch radio, Propose changes, then Create pull request.
+For GitHub implementation, do not browse /pulls first. Navigate directly to the edit URL for an existing path or the new-file URL from TASK.mutation_entry_hint. On a new-file page first fill field="file_name", then fill field="file_contents", select the new-branch radio, Propose changes, then Create pull request.
 For SHA evidence use the exact observed 40-character SHA alone as extracted_fact.value, not a sentence containing it.
 If current_main_evidence_url is present, visit it and use its top-level sha.
 Return one JSON object only:
