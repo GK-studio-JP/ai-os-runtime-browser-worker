@@ -20,6 +20,7 @@ from ai_os_browser_worker.navigation_policy import (
 )
 from browser_worker_launcher import (
     LauncherError,
+    _is_gemini_transient_error,
     _task_payload_from_issue,
     canonical_claim_present,
     canonical_result_present,
@@ -89,6 +90,22 @@ def mutation_receipt(
     material = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     value["fingerprint"] = "sha256:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
     return value
+
+
+class GeminiTransientErrorTests(unittest.TestCase):
+    def test_recognizes_logged_out_generic_failure(self):
+        self.assertTrue(
+            _is_gemini_transient_error(
+                "Gemini said Sorry, something went wrong. Please try your request again."
+            )
+        )
+
+    def test_does_not_treat_normal_response_as_transient_failure(self):
+        self.assertFalse(
+            _is_gemini_transient_error(
+                'Gemini said {"kind":"wait","reason":"still working"}'
+            )
+        )
 
 
 class PlanTests(unittest.TestCase):
