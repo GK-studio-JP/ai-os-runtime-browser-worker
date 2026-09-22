@@ -309,6 +309,10 @@ def _find(
     )
 
 
+def _has_new_gemini_response(baseline_text: str, current_text: str) -> bool:
+    return current_text.count("Gemini said") > baseline_text.count("Gemini said")
+
+
 def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, Any]:
     attempt_prompt = prompt_text
     for attempt in range(2):
@@ -323,14 +327,15 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
             raise LauncherError("Gemini prompt box unavailable")
         relay.command("fill", {"elementId": box["id"], "text": attempt_prompt})
         page = relay.command("getPage", {})
-        baseline = len(_commands(str(page.get("pageText") or "")))
+        baseline_text = str(page.get("pageText") or "")
+        baseline = len(_commands(baseline_text))
         send = _find(page, label="Send message")
         if not send:
             raise LauncherError("Gemini send button unavailable")
         relay.command("click", {"elementId": send["id"]})
 
         end = time.monotonic() + GEMINI_RESPONSE_TIMEOUT_SECONDS
-        retryable_error = False
+        retry_reason: str | None = None
         while time.monotonic() < end:
             time.sleep(1.5)
             page = relay.command("getPage", {})
@@ -340,22 +345,34 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
             if stopped and len(commands) > baseline:
                 return commands[-1]
             if stopped and _is_gemini_transient_error(text):
-                retryable_error = True
+                retry_reason = "transient"
+                break
+            if stopped and _has_new_gemini_response(baseline_text, text):
+                retry_reason = "malformed"
                 break
 
-        if attempt == 0 and retryable_error:
-            attempt_prompt = (
-                prompt_text
-                + "\nRETRY: Do not use Gemini web search or external tools. "
-                "Use only TASK, OBSERVED, and OBSERVATION. Return one JSON object."
-            )
+        if attempt == 0 and retry_reason:
+            if retry_reason == "malformed":
+                retry_instruction = (
+                    "\nRETRY: Your previous response was visible but was not valid parseable JSON. "
+                    "Return exactly one valid JSON object matching the requested launcher schema. "
+                    "Escape quotes and backslashes inside JSON strings. "
+                    "Do not use Markdown fences, Gemini web search, or external tools."
+                )
+            else:
+                retry_instruction = (
+                    "\nRETRY: Do not use Gemini web search or external tools. "
+                    "Use only TASK, OBSERVED, and OBSERVATION. Return one JSON object."
+                )
+            attempt_prompt = prompt_text + retry_instruction
             continue
-        if retryable_error:
+        if retry_reason == "malformed":
+            raise LauncherError("Gemini returned malformed launcher command after retry")
+        if retry_reason:
             raise LauncherError("Gemini logged-out response failed after retry")
         raise LauncherError("Gemini response timed out")
 
     raise LauncherError("Gemini returned no launcher command")
-
 
 def _editor_progress(observation: dict[str, Any]) -> dict[str, str] | None:
     url = str(observation.get("url") or "")
