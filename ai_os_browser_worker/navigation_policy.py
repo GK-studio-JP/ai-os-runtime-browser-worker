@@ -217,10 +217,9 @@ def _require_safe_commit_target(
     if new_branch and _checked(new_branch):
         return
     if direct and _checked(direct):
-        url = str(observation.get("url") or "")
-        if f"/{repository}/edit/main/" in url or f"/{repository}/new/main/" in url:
-            raise LauncherError("direct commit to main is forbidden by Kernel receipt")
-        return
+        raise LauncherError(
+            "direct commit is forbidden; Kernel receipt requires a new branch"
+        )
     raise LauncherError("repository mutation requires an explicit safe branch target")
 
 
