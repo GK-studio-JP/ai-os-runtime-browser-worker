@@ -402,7 +402,7 @@ class ModelCommandTests(unittest.TestCase):
                 }
             ],
         }
-        with self.assertRaisesRegex(LauncherError, "outside task repository"):
+        with self.assertRaisesRegex(LauncherError, "outside task/context repositories"):
             self.validate(
                 {"action": "click", "args": {"elementId": "g4-e11"}},
                 observation,
