@@ -356,6 +356,23 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
     raise LauncherError("Gemini returned no launcher command")
 
 
+def _editor_progress(observation: dict[str, Any]) -> dict[str, str] | None:
+    url = str(observation.get("url") or "")
+    if "/new/" not in url:
+        return None
+    for element in observation.get("elements") or []:
+        if element.get("role") != "textbox":
+            continue
+        label = str(element.get("label") or "")
+        match = re.match(r"Editing (.+?) file contents(?:\s|$)", label)
+        if match:
+            return {
+                "file_name": match.group(1),
+                "next_required": "fill:file_contents",
+            }
+    return None
+
+
 def prompt(
     agent: str,
     task: str,
@@ -390,6 +407,7 @@ def prompt(
             if repository and mutation_enabled
             else None
         ),
+        "editor_progress": _editor_progress(observation),
     }
     evidence_urls: list[str] = []
     evidence_shas: list[str] = []
@@ -429,6 +447,7 @@ Rules: never expose secrets; evidence must come from observed task pages. Do not
 For click/fill, use the current-generation elementId exactly when possible. Never return click/fill with no target. For GitHub editor fill, if preserving elementId is difficult, args may use field="file_name", field="file_contents", or field="commit_message"; the Runtime resolves only one safe current-generation textbox. For a mutation click, args may use the exact visible label as label/target and the Runtime resolves only one current-generation allowed control.
 If objective/acceptance asks to add, implement, fix, update, or change something and observed pages do not already prove it exists, perform the smallest authorized branch/PR mutation before finish. README/repository listings/unrelated or pre-existing PRs are not implementation evidence.
 For GitHub implementation, do not browse /pulls first. Navigate directly to the edit URL for an existing path or the new-file URL from TASK.mutation_entry_hint. On a new-file page first fill field="file_name", then fill field="file_contents", select the new-branch radio, Propose changes, then Create pull request.
+If TASK.editor_progress.next_required is "fill:file_contents", the file name is already set. Do not fill file_name again; the next mutation must fill field="file_contents" with the complete source text.
 For SHA evidence use the exact observed 40-character SHA alone as extracted_fact.value, not a sentence containing it.
 If current_main_evidence_url is present, visit it and use its top-level sha.
 Return one JSON object only:
