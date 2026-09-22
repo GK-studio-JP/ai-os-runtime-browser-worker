@@ -12,9 +12,22 @@ GEMINI = "https://gemini.google.com/app"
 
 def _task_requirement_text(task_payload: dict[str, Any]) -> str:
     acceptance = task_payload.get("acceptance")
-    rows = acceptance if isinstance(acceptance, list) else []
+    acceptance_rows = acceptance if isinstance(acceptance, list) else []
+    contracts = task_payload.get("contracts")
+    contract_rows = contracts if isinstance(contracts, list) else []
     return "\n".join(
-        [str(task_payload.get("objective") or ""), *[str(item) for item in rows]]
+        [
+            str(task_payload.get("objective") or ""),
+            *[str(item) for item in acceptance_rows],
+            *[str(item) for item in contract_rows],
+        ]
+    )
+
+
+def _requires_repository_change(task_payload: dict[str, Any]) -> bool:
+    objective = str(task_payload.get("objective") or "").lower()
+    return bool(
+        re.search(r"\b(add|implement|fix|update|change|create|modify|repair)\b", objective)
     )
 
 
@@ -103,6 +116,92 @@ def validate_finish_evidence(
     requirement_text = _task_requirement_text(task_payload)
     requirement_lower = requirement_text.lower()
     artifact_text = "\n".join(str(item).strip() for item in artifacts)
+    repository = _task_repository(task_payload)
+
+    contracts = task_payload.get("contracts")
+    contract_rows = contracts if isinstance(contracts, list) else []
+    contract_shas = SHA40_RE.findall("\n".join(str(item) for item in contract_rows))
+    for required_sha in contract_shas:
+        if required_sha not in artifact_text:
+            return (
+                "finish rejected: RESULT artifacts must include the pinned contract SHA "
+                f"{required_sha}."
+            )
+        if not observed(required_sha):
+            return (
+                "finish rejected: pinned contract SHA was not observed in the task browser: "
+                f"{required_sha}"
+            )
+        if not any(
+            required_sha in str(item.get("value") or "")
+            for item in evidence
+        ):
+            return (
+                "finish rejected: structured evidence must include the observed pinned "
+                f"contract SHA {required_sha}."
+            )
+
+    if _requires_repository_change(task_payload):
+        if not repository:
+            return "finish rejected: implementation evidence requires task repository in owner/repo form."
+        repo_prefix = f"https://github.com/{repository}"
+        implementation_urls = [
+            str(item).strip()
+            for item in artifacts
+            if re.fullmatch(
+                re.escape(repo_prefix) + r"/(?:pull/\d+|commit/[0-9a-fA-F]{40})",
+                str(item).strip(),
+            )
+        ]
+        if not implementation_urls:
+            return (
+                "finish rejected: implementation task requires a task-repository "
+                "pull request or commit URL in RESULT artifacts."
+            )
+        observed_implementation = [url for url in implementation_urls if visited(url)]
+        if not observed_implementation:
+            return (
+                "finish rejected: implementation artifact was not visited in the task browser."
+            )
+        if not any(
+            item.get("kind") in {"visited_url", "immutable_artifact"}
+            and str(item.get("value") or "").rstrip("/")
+            in {url.rstrip("/") for url in observed_implementation}
+            for item in evidence
+        ):
+            return (
+                "finish rejected: structured evidence must include the observed "
+                "implementation artifact."
+            )
+
+    if "workflow evidence" in requirement_lower or "github actions" in requirement_lower:
+        if not repository:
+            return "finish rejected: workflow evidence requires task repository in owner/repo form."
+        workflow_prefix = f"https://github.com/{repository}/actions/runs/"
+        workflow_urls = [
+            str(item).strip()
+            for item in artifacts
+            if re.fullmatch(re.escape(workflow_prefix) + r"\d+", str(item).strip())
+        ]
+        if not workflow_urls:
+            return (
+                "finish rejected: acceptance requires an exact GitHub Actions run URL "
+                "in RESULT artifacts."
+            )
+        observed_workflows = [url for url in workflow_urls if visited(url)]
+        if not observed_workflows:
+            return (
+                "finish rejected: workflow run artifact was not visited in the task browser."
+            )
+        if not any(
+            item.get("kind") in {"visited_url", "immutable_artifact"}
+            and str(item.get("value") or "").rstrip("/")
+            in {url.rstrip("/") for url in observed_workflows}
+            for item in evidence
+        ):
+            return (
+                "finish rejected: structured evidence must include the observed workflow run."
+            )
 
     needs_current_main_sha = _requires_current_main_sha(task_payload)
     needs_sha = "commit sha" in requirement_lower or needs_current_main_sha
