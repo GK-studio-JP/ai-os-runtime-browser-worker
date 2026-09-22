@@ -176,6 +176,50 @@ def _record_page_evidence(ledger: list[dict[str, Any]], page: dict[str, Any]) ->
         del ledger[:-80]
 
 
+def _source_edit_url(url: str, repository: str | None) -> bool:
+    if not repository:
+        return False
+    prefix = f"https://github.com/{repository}/"
+    if not str(url or "").startswith(prefix):
+        return False
+    suffix = str(url)[len(prefix):]
+    return suffix.startswith("edit/") or suffix.startswith("new/")
+
+
+def _initial_artifact_snapshots(
+    token: str | None,
+    repository: str | None,
+) -> tuple[set[str], set[str]]:
+    if not repository:
+        return set(), set()
+
+    pull_rows = github(
+        f"/repos/{repository}/pulls?state=all&per_page=100",
+        token=token,
+    )
+    pull_urls = {
+        str(row.get("html_url") or "").rstrip("/")
+        for row in (pull_rows if isinstance(pull_rows, list) else [])
+        if isinstance(row, dict) and row.get("html_url")
+    }
+
+    run_data = github(
+        f"/repos/{repository}/actions/runs?per_page=100",
+        token=token,
+    )
+    workflow_rows = (
+        run_data.get("workflow_runs")
+        if isinstance(run_data, dict)
+        else []
+    )
+    workflow_urls = {
+        str(row.get("html_url") or "").rstrip("/")
+        for row in (workflow_rows if isinstance(workflow_rows, list) else [])
+        if isinstance(row, dict) and row.get("html_url")
+    }
+    return pull_urls, workflow_urls
+
+
 def reduce_observation(
     page: dict[str, Any],
     *,
@@ -293,6 +337,7 @@ def prompt(
     task_payload: dict[str, Any],
     ledger: list[dict[str, Any]],
     mutation_enabled: bool,
+    source_mutation_performed: bool = False,
 ) -> str:
     claim_state = "verified" if claimed else "not-verified"
     repository = _task_repository(task_payload)
@@ -308,6 +353,13 @@ def prompt(
         "contracts": task_payload.get("contracts"),
         "context_refs": task_payload.get("context_refs"),
         "current_main_evidence_url": current_main_evidence_url,
+        "source_mutation_performed": source_mutation_performed,
+        "mutation_entry_hint": (
+            f"https://github.com/{repository}/edit/main/<existing-path> or "
+            f"https://github.com/{repository}/new/main"
+            if repository and mutation_enabled
+            else None
+        ),
     }
     evidence_urls: list[str] = []
     evidence_shas: list[str] = []
@@ -344,7 +396,9 @@ TASK={json.dumps(task_context, ensure_ascii=False, separators=(",", ":"))}
 OBSERVED={json.dumps(evidence_context, ensure_ascii=False, separators=(",", ":"))}
 POLICY={mutation_policy}
 Rules: current-generation IDs only; never expose secrets; evidence must come from observed task pages.
-If objective/acceptance asks to add, implement, fix, update, or change something and observed pages do not already prove it exists, perform the smallest authorized branch/PR mutation before finish. README/repository listings/unrelated PRs are not implementation evidence.
+If objective/acceptance asks to add, implement, fix, update, or change something and observed pages do not already prove it exists, perform the smallest authorized branch/PR mutation before finish. README/repository listings/unrelated or pre-existing PRs are not implementation evidence.
+For GitHub implementation, do not browse /pulls first. Navigate directly to the edit URL for an existing path or the new-file URL from TASK.mutation_entry_hint, fill source content, choose the new-branch radio, Propose changes, then Create pull request.
+For SHA evidence use the exact observed 40-character SHA alone as extracted_fact.value, not a sentence containing it.
 If current_main_evidence_url is present, visit it and use its top-level sha.
 Return one JSON object only:
 {action_contract}
@@ -530,6 +584,11 @@ def run_worker(
     issue_no = issue_number_from_dispatch(dispatch)
     issue_data = github(f"/repos/{BOARD}/issues/{issue_no}", token=token)
     task_payload = _task_payload_from_issue(str(issue_data.get("body") or "")) if isinstance(issue_data, dict) else {}
+    repository = _task_repository(task_payload)
+    preexisting_pull_urls, preexisting_workflow_urls = _initial_artifact_snapshots(
+        token,
+        repository,
+    )
     initial_comments = comments(token, issue_no)
     if canonical_task_completed(initial_comments, task=task):
         print(f"ALREADY_COMPLETED task={task}")
@@ -539,6 +598,7 @@ def run_worker(
     loop_guard = LoopGuard()
     loop_capped_reason: str | None = None
     tool_receipts: list[dict[str, Any]] = []
+    source_mutation_performed = False
     relay.ready()
     relay.command("start", {})
     relay.command("goto", {"url": issue_url})
@@ -601,6 +661,7 @@ def run_worker(
                     task_payload,
                     ledger,
                     mutation_receipt is not None,
+                    source_mutation_performed,
                 ),
             )
 
@@ -614,6 +675,10 @@ def run_worker(
                     ledger,
                     task_payload,
                     issue_url,
+                    source_mutation_performed=source_mutation_performed,
+                    require_new_pr=mutation_receipt is not None,
+                    preexisting_pull_urls=preexisting_pull_urls,
+                    preexisting_workflow_urls=preexisting_workflow_urls,
                 )
                 if rejection:
                     feedback = rejection
@@ -729,6 +794,11 @@ def run_worker(
                 continue
 
             _record_tool_receipt(tool_receipts, receipt)
+            if (
+                action == "fill"
+                and _source_edit_url(str(guard_page.get("url") or ""), repository)
+            ):
+                source_mutation_performed = True
             page = relay.command("getPage", {})
             _record_page_evidence(ledger, page)
             decision = loop_guard.observe_tool_call(
