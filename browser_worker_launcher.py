@@ -68,7 +68,7 @@ def _is_gemini_transient_error(text: str) -> bool:
     return any(marker in text for marker in GEMINI_TRANSIENT_ERRORS)
 
 
-def _balanced_json_objects(text: str) -> list[str]:
+def _balanced_json_object_spans(text: str) -> list[tuple[int, str]]:
     out = []
     for start, ch in enumerate(text):
         if ch != "{":
@@ -93,21 +93,56 @@ def _balanced_json_objects(text: str) -> list[str]:
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    out.append(text[start : index + 1])
+                    out.append((start, text[start : index + 1]))
                     break
     return out
 
 
-def _commands(text: str) -> list[dict[str, Any]]:
+def _balanced_json_objects(text: str) -> list[str]:
+    return [raw for _start, raw in _balanced_json_object_spans(text)]
+
+
+def _escaped_json_commands(text: str) -> list[tuple[int, dict[str, Any]]]:
     out = []
-    for raw in _balanced_json_objects(text):
+    covered_until = -1
+    for match in re.finditer(r'\{\s*\\\"kind\\\"', text):
+        start = match.start()
+        if start <= covered_until:
+            continue
+
+        cursor = start
+        while True:
+            end = text.find("}", cursor + 1)
+            if end < 0:
+                break
+            raw = text[start : end + 1]
+            try:
+                decoded = json.loads('"' + raw + '"')
+                obj = json.loads(decoded)
+            except (json.JSONDecodeError, TypeError):
+                cursor = end
+                continue
+            if isinstance(obj, dict) and obj.get("kind") in {"browser_action", "finish", "wait"}:
+                out.append((start, obj))
+                covered_until = end
+                break
+            cursor = end
+    return out
+
+
+def _commands(text: str) -> list[dict[str, Any]]:
+    rows: list[tuple[int, dict[str, Any]]] = []
+    for start, raw in _balanced_json_object_spans(text):
         try:
             obj = json.loads(raw)
         except json.JSONDecodeError:
             continue
         if isinstance(obj, dict) and obj.get("kind") in {"browser_action", "finish", "wait"}:
-            out.append(obj)
-    return out
+            rows.append((start, obj))
+
+    rows.extend(_escaped_json_commands(text))
+    rows.sort(key=lambda row: row[0])
+    return [obj for _start, obj in rows]
 
 
 def extract_model_command(page_text: str) -> dict[str, Any]:
