@@ -51,6 +51,14 @@ GEMINI_TRANSIENT_ERRORS = (
     "Sorry, something went wrong. Please try your request again.",
 )
 GEMINI_RESPONSE_TIMEOUT_SECONDS = 90
+AI_OS_CANONICAL_OWNER_ACTOR_ENV = "AI_OS_CANONICAL_OWNER_ACTOR"
+
+
+def canonical_owner_actor() -> str:
+    actor = os.environ.get(AI_OS_CANONICAL_OWNER_ACTOR_ENV, "").strip()
+    if not actor:
+        raise LauncherError(f"{AI_OS_CANONICAL_OWNER_ACTOR_ENV} is required")
+    return actor
 
 
 def _is_gemini_transient_error(text: str) -> bool:
@@ -135,10 +143,15 @@ def canonical_claim_present(
     *,
     task: str,
     agent_id: str,
+    owner_actor: str,
     now: datetime | None = None,
 ) -> bool:
     state = _canonical_replay_state(comments, task=task, now=now)
-    return state.state == "claimed" and state.owner == agent_id
+    return (
+        state.state == "claimed"
+        and state.owner == agent_id
+        and state.owner_actor == owner_actor
+    )
 
 
 def canonical_result_present(
@@ -146,6 +159,7 @@ def canonical_result_present(
     *,
     task: str,
     agent_id: str,
+    owner_actor: str,
     now: datetime | None = None,
 ) -> bool:
     state = _canonical_replay_state(comments, task=task, now=now)
@@ -153,6 +167,7 @@ def canonical_result_present(
         state.state == "completed"
         and state.latest_result is not None
         and state.latest_result.agent_id == agent_id
+        and state.latest_result.actor_login == owner_actor
     )
 
 
@@ -577,11 +592,16 @@ def ensure_canonical_lease(
     relay: Relay,
     task: str,
     agent_id: str,
+    owner_actor: str,
     phase: str,
     now: datetime | None = None,
 ) -> Any:
     state = _canonical_replay_state(comments(token, issue_no), task=task, now=now)
-    if state.state != "claimed" or state.owner != agent_id:
+    if (
+        state.state != "claimed"
+        or state.owner != agent_id
+        or state.owner_actor != owner_actor
+    ):
         raise LauncherError(f"canonical lease ownership was lost before {phase}")
 
     if state.lease_status != "expiring":
@@ -618,17 +638,23 @@ def ensure_canonical_lease(
         return (
             refreshed.state == "claimed"
             and refreshed.owner == agent_id
+            and refreshed.owner_actor == owner_actor
             and refreshed.lease_expires_at != previous_expiry
             and latest is not None
             and latest.type == "HEARTBEAT"
             and latest.agent_id == agent_id
+            and latest.actor_login == owner_actor
         )
 
     if not wait_for_protocol_event(token, issue_no, renewed):
         raise LauncherError(f"canonical HEARTBEAT was not verified before {phase}")
 
     refreshed = _canonical_replay_state(comments(token, issue_no), task=task, now=now)
-    if refreshed.state != "claimed" or refreshed.owner != agent_id:
+    if (
+        refreshed.state != "claimed"
+        or refreshed.owner != agent_id
+        or refreshed.owner_actor != owner_actor
+    ):
         raise LauncherError(f"canonical lease ownership was lost after HEARTBEAT before {phase}")
     if refreshed.lease_expires_at == previous_expiry:
         raise LauncherError(f"canonical HEARTBEAT did not extend the lease before {phase}")
@@ -664,6 +690,7 @@ def run_worker(
         return 0
 
     agent = f"browser-chat-gemini-{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    owner_actor = canonical_owner_actor()
     loop_guard = LoopGuard()
     loop_capped_reason: str | None = None
     tool_receipts: list[dict[str, Any]] = []
@@ -687,7 +714,12 @@ def run_worker(
     if not wait_for_protocol_event(
         token,
         issue_no,
-        lambda rows: canonical_claim_present(rows, task=task, agent_id=agent),
+        lambda rows: canonical_claim_present(
+            rows,
+            task=task,
+            agent_id=agent,
+            owner_actor=owner_actor,
+        ),
     ):
         raise LauncherError("canonical CLAIM was not verified after submission")
 
@@ -708,6 +740,7 @@ def run_worker(
                 relay=relay,
                 task=task,
                 agent_id=agent,
+                owner_actor=owner_actor,
                 phase="task work",
             )
             claimed = True
@@ -759,6 +792,7 @@ def run_worker(
                     relay=relay,
                     task=task,
                     agent_id=agent,
+                    owner_actor=owner_actor,
                     phase="RESULT submission",
                 )
                 summary = str(model_command.get("summary") or "").strip()
@@ -779,6 +813,7 @@ def run_worker(
                         rows,
                         task=task,
                         agent_id=agent,
+                        owner_actor=owner_actor,
                     ),
                 ):
                     print(
@@ -843,6 +878,7 @@ def run_worker(
                     relay=relay,
                     task=task,
                     agent_id=agent,
+                    owner_actor=owner_actor,
                     phase="browser mutation",
                 )
 

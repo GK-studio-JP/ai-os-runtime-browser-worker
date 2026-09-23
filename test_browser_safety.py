@@ -244,6 +244,7 @@ class LauncherLoopCapTests(unittest.TestCase):
             patch("browser_worker_launcher.github", return_value={"body": ""}),
             patch("browser_worker_launcher.comments", return_value=[]),
             patch("browser_worker_launcher.canonical_task_completed", return_value=False),
+            patch("browser_worker_launcher.canonical_owner_actor", return_value="repo-owner"),
             patch("browser_worker_launcher.append_issue_comment"),
             patch("browser_worker_launcher.wait_for_protocol_event", return_value=True),
             patch("browser_worker_launcher.ensure_canonical_lease"),
