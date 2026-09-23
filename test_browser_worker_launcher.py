@@ -650,6 +650,7 @@ def canonical_comment(
     *,
     task: str = "#1",
     updated_at: datetime | None = None,
+    actor: str = "repo-owner",
 ):
     next_action = "continue" if event_type in {"CLAIM", "HEARTBEAT"} else None
     payload = {
@@ -670,7 +671,7 @@ def canonical_comment(
         "created_at": stamp(created_at),
         "updated_at": stamp(updated_at or created_at),
         "body": "<!-- ai-bb:v1 -->\n```json\n" + json.dumps(payload) + "\n```",
-        "user": {"login": "repo-owner"},
+        "user": {"login": actor},
         "author_association": "OWNER",
     }
 
@@ -696,6 +697,7 @@ class ProtocolTests(unittest.TestCase):
                 comments,
                 task="#1",
                 agent_id="a",
+                owner_actor="repo-owner",
                 now=t0 + timedelta(minutes=1),
             )
         )
@@ -704,6 +706,7 @@ class ProtocolTests(unittest.TestCase):
                 comments,
                 task="#1",
                 agent_id="a",
+                owner_actor="repo-owner",
                 now=t0 + timedelta(minutes=1),
             )
         )
@@ -713,6 +716,7 @@ class ProtocolTests(unittest.TestCase):
                 comments,
                 task="#1",
                 agent_id="a",
+                owner_actor="repo-owner",
                 now=t0 + timedelta(minutes=3),
             )
         )
@@ -724,6 +728,28 @@ class ProtocolTests(unittest.TestCase):
             )
         )
 
+    def test_claim_helper_rejects_same_agent_from_different_actor(self):
+        t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
+        comments = [canonical_comment(1, t0, "CLAIM", "a", actor="owner-a")]
+        self.assertTrue(
+            canonical_claim_present(
+                comments,
+                task="#1",
+                agent_id="a",
+                owner_actor="owner-a",
+                now=t0 + timedelta(minutes=1),
+            )
+        )
+        self.assertFalse(
+            canonical_claim_present(
+                comments,
+                task="#1",
+                agent_id="a",
+                owner_actor="owner-b",
+                now=t0 + timedelta(minutes=1),
+            )
+        )
+
     def test_overlapping_claim_does_not_steal_live_lease(self):
         t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
         comments = [
@@ -732,7 +758,9 @@ class ProtocolTests(unittest.TestCase):
         ]
         now = t0 + timedelta(minutes=8)
         self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
+        owner_actor="repo-owner",
         self.assertFalse(canonical_claim_present(comments, task="#1", agent_id="b", now=now))
+        owner_actor="repo-owner",
         self.assertFalse(canonical_task_completed(comments, task="#1", now=now))
 
     def test_expired_lease_allows_reclaim(self):
@@ -743,7 +771,9 @@ class ProtocolTests(unittest.TestCase):
         ]
         now = t0 + timedelta(minutes=17)
         self.assertFalse(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
+        owner_actor="repo-owner",
         self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="b", now=now))
+        owner_actor="repo-owner",
 
     def test_loser_result_does_not_complete_task(self):
         t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
@@ -754,7 +784,9 @@ class ProtocolTests(unittest.TestCase):
         ]
         now = t0 + timedelta(minutes=9)
         self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
+        owner_actor="repo-owner",
         self.assertFalse(canonical_result_present(comments, task="#1", agent_id="b", now=now))
+        owner_actor="repo-owner",
         self.assertFalse(canonical_task_completed(comments, task="#1", now=now))
 
     def test_heartbeat_extends_live_owner(self):
@@ -765,6 +797,7 @@ class ProtocolTests(unittest.TestCase):
         ]
         now = t0 + timedelta(minutes=20)
         self.assertTrue(canonical_claim_present(comments, task="#1", agent_id="a", now=now))
+        owner_actor="repo-owner",
 
     def test_ensure_canonical_lease_renews_expiring_owner_without_replacing_task_page(self):
         t0 = datetime(2026, 9, 20, tzinfo=timezone.utc)
@@ -801,6 +834,7 @@ class ProtocolTests(unittest.TestCase):
                 relay=relay,
                 task="#1",
                 agent_id="a",
+                owner_actor="repo-owner",
                 phase="task work",
                 now=now,
             )
@@ -839,6 +873,7 @@ class ProtocolTests(unittest.TestCase):
                 relay=object(),
                 task="#1",
                 agent_id="a",
+                owner_actor="repo-owner",
                 phase="task work",
                 now=t0 + timedelta(minutes=1),
             )
@@ -863,6 +898,7 @@ class ProtocolTests(unittest.TestCase):
                     relay=object(),
                     task="#1",
                     agent_id="b",
+                    owner_actor="repo-owner",
                     phase="task work",
                     now=t0 + timedelta(minutes=8),
                 )
@@ -896,6 +932,7 @@ class ProtocolTests(unittest.TestCase):
                     relay=relay,
                     task="#1",
                     agent_id="a",
+                    owner_actor="repo-owner",
                     phase="RESULT submission",
                     now=t0 + timedelta(minutes=11),
                 )
@@ -918,6 +955,7 @@ class ProtocolTests(unittest.TestCase):
                 comments,
                 task="#1",
                 agent_id="a",
+                owner_actor="repo-owner",
                 now=t0 + timedelta(minutes=1),
             )
 
