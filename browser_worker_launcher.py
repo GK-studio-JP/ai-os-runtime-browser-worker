@@ -315,9 +315,10 @@ def _has_new_gemini_response(baseline_text: str, current_text: str) -> bool:
 
 def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, Any]:
     attempt_prompt = prompt_text
+    relay.command("switchPage", {"index": gemini_index})
+    relay.command("goto", {"url": GEMINI})
     for attempt in range(2):
         relay.command("switchPage", {"index": gemini_index})
-        relay.command("goto", {"url": GEMINI})
         page = relay.command("getPage", {})
         if dismiss := _find(page, text="Not now"):
             relay.command("click", {"elementId": dismiss["id"]})
