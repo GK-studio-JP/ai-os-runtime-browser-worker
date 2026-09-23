@@ -51,6 +51,8 @@ GEMINI_TRANSIENT_ERRORS = (
     "Sorry, something went wrong. Please try your request again.",
 )
 GEMINI_RESPONSE_TIMEOUT_SECONDS = 90
+GEMINI_RETRY_SETTLE_TIMEOUT_SECONDS = 10
+GEMINI_RETRY_SETTLE_POLL_SECONDS = 0.5
 GEMINI_MALFORMED_STABLE_POLLS = 3
 AI_OS_CANONICAL_OWNER_ACTOR_ENV = "AI_OS_CANONICAL_OWNER_ACTOR"
 
@@ -329,6 +331,42 @@ def _has_new_gemini_response(baseline_text: str, current_text: str) -> bool:
     return current_text.count("Gemini said") > baseline_text.count("Gemini said")
 
 
+def _settle_gemini_before_retry(
+    relay: Relay,
+    page: dict[str, Any],
+) -> dict[str, Any]:
+    stop = _find(page, label="Stop response")
+    if not stop:
+        return page
+
+    relay.command("click", {"elementId": stop["id"]})
+    end = time.monotonic() + GEMINI_RETRY_SETTLE_TIMEOUT_SECONDS
+    while time.monotonic() < end:
+        time.sleep(GEMINI_RETRY_SETTLE_POLL_SECONDS)
+        page = relay.command("getPage", {})
+        if not _find(page, label="Stop response"):
+            return page
+    raise LauncherError("Gemini previous response did not stop before retry")
+
+
+def _wait_for_gemini_retry_send(
+    relay: Relay,
+    page: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    send = _find(page, label="Send message")
+    if send:
+        return page, send
+
+    end = time.monotonic() + GEMINI_RETRY_SETTLE_TIMEOUT_SECONDS
+    while time.monotonic() < end:
+        time.sleep(GEMINI_RETRY_SETTLE_POLL_SECONDS)
+        page = relay.command("getPage", {})
+        send = _find(page, label="Send message")
+        if send:
+            return page, send
+    raise LauncherError("Gemini retry input did not become sendable")
+
+
 def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, Any]:
     attempt_prompt = prompt_text
     relay.command("switchPage", {"index": gemini_index})
@@ -339,6 +377,8 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
         if dismiss := _find(page, text="Not now"):
             relay.command("click", {"elementId": dismiss["id"]})
             page = relay.command("getPage", {})
+        if attempt > 0:
+            page = _settle_gemini_before_retry(relay, page)
         box = _find(page, label="Enter a prompt for Gemini")
         if not box:
             raise LauncherError("Gemini prompt box unavailable")
@@ -348,7 +388,9 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
         baseline = len(_commands(baseline_text))
         send = _find(page, label="Send message")
         if not send:
-            raise LauncherError("Gemini send button unavailable")
+            if attempt == 0:
+                raise LauncherError("Gemini send button unavailable")
+            page, send = _wait_for_gemini_retry_send(relay, page)
         relay.command("click", {"elementId": send["id"]})
 
         end = time.monotonic() + GEMINI_RESPONSE_TIMEOUT_SECONDS
