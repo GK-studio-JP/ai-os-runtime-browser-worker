@@ -403,6 +403,237 @@ class GeminiTransientErrorTests(unittest.TestCase):
         )
 
 
+    def test_timeout_retry_stops_active_generation_before_compact_retry(self):
+        class FakeRelay:
+            def __init__(self):
+                self.fills = []
+                self.actions = []
+                self.pages = [
+                    {
+                        "pageText": "",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g1-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g2-stop", "label": "Stop response"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g3-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK RETRY",
+                        "elements": [
+                            {"id": "g3-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g3-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "pageText": (
+                            'TASK RETRY Gemini said '
+                            '{"kind":"wait","reason":"stopped-and-retried"}'
+                        ),
+                        "elements": [],
+                    },
+                ]
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "getPage":
+                    return self.pages.pop(0)
+                if action == "fill":
+                    self.fills.append(args["text"])
+                return {}
+
+        relay = FakeRelay()
+        original_prompt = "ORIGINAL-PROMPT-SENTINEL " * 300
+        with (
+            patch("browser_worker_launcher.time.sleep", return_value=None),
+            patch(
+                "browser_worker_launcher.time.monotonic",
+                side_effect=[0.0, 91.0, 100.0, 100.1, 200.0, 200.1],
+            ),
+        ):
+            result = ask_gemini(relay, 1, original_prompt)
+
+        self.assertEqual(result, {"kind": "wait", "reason": "stopped-and-retried"})
+        self.assertEqual(len(relay.fills), 2)
+        self.assertEqual(relay.fills[0], original_prompt)
+        self.assertNotIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
+        self.assertLess(len(relay.fills[1]), 1000)
+        stop_index = next(
+            index
+            for index, (action, args) in enumerate(relay.actions)
+            if action == "click" and args.get("elementId") == "g2-stop"
+        )
+        fill_indexes = [
+            index
+            for index, (action, _args) in enumerate(relay.actions)
+            if action == "fill"
+        ]
+        self.assertLess(stop_index, fill_indexes[1])
+        self.assertEqual(
+            sum(1 for action, _ in relay.actions if action == "goto"),
+            1,
+            "timeout retry must stay in the same Gemini conversation",
+        )
+
+    def test_timeout_retry_fails_if_active_generation_never_stops(self):
+        class FakeRelay:
+            def __init__(self):
+                self.fills = []
+                self.actions = []
+                self.pages = [
+                    {
+                        "pageText": "",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g1-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g2-stop", "label": "Stop response"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g3-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g3-stop", "label": "Stop response"},
+                        ],
+                    },
+                ]
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "getPage":
+                    return self.pages.pop(0)
+                if action == "fill":
+                    self.fills.append(args["text"])
+                return {}
+
+        relay = FakeRelay()
+        original_prompt = "ORIGINAL-PROMPT-SENTINEL " * 300
+        with (
+            patch("browser_worker_launcher.time.sleep", return_value=None),
+            patch(
+                "browser_worker_launcher.time.monotonic",
+                side_effect=[0.0, 91.0, 100.0, 100.1, 111.0],
+            ),
+        ):
+            with self.assertRaisesRegex(
+                LauncherError,
+                "Gemini previous response did not stop before retry",
+            ):
+                ask_gemini(relay, 1, original_prompt)
+
+        self.assertEqual(relay.fills, [original_prompt])
+        self.assertTrue(
+            any(
+                action == "click" and args.get("elementId") == "g2-stop"
+                for action, args in relay.actions
+            )
+        )
+        self.assertEqual(
+            sum(1 for action, _ in relay.actions if action == "goto"),
+            1,
+        )
+
+    def test_timeout_retry_fails_if_retry_input_never_becomes_sendable(self):
+        class FakeRelay:
+            def __init__(self):
+                self.fills = []
+                self.actions = []
+                self.pages = [
+                    {
+                        "pageText": "",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g1-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK RETRY",
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK RETRY",
+                        "elements": [
+                            {"id": "g3-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                ]
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "getPage":
+                    return self.pages.pop(0)
+                if action == "fill":
+                    self.fills.append(args["text"])
+                return {}
+
+        relay = FakeRelay()
+        original_prompt = "ORIGINAL-PROMPT-SENTINEL " * 300
+        with (
+            patch("browser_worker_launcher.time.sleep", return_value=None),
+            patch(
+                "browser_worker_launcher.time.monotonic",
+                side_effect=[0.0, 91.0, 100.0, 100.1, 111.0],
+            ),
+        ):
+            with self.assertRaisesRegex(
+                LauncherError,
+                "Gemini retry input did not become sendable",
+            ):
+                ask_gemini(relay, 1, original_prompt)
+
+        self.assertEqual(len(relay.fills), 2)
+        self.assertEqual(relay.fills[0], original_prompt)
+        self.assertNotIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
+        self.assertLess(len(relay.fills[1]), 1000)
+        self.assertEqual(
+            sum(1 for action, _ in relay.actions if action == "goto"),
+            1,
+        )
+
+
 class PlanTests(unittest.TestCase):
     def test_validate_plan_accepts_single_dispatch(self):
         item = validate_plan(plan([dispatch("#12")]))
