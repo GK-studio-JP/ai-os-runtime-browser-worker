@@ -70,8 +70,13 @@ def _run_bounded_subprocess(
     deadline = time.monotonic() + timeout_seconds
 
     try:
-        process.stdin.write(payload)
-        process.stdin.close()
+        try:
+            process.stdin.write(payload)
+            process.stdin.close()
+        except BrokenPipeError:
+            # The child may exit before consuming stdin; return-code handling below
+            # owns that failure without exposing child stderr.
+            pass
 
         while True:
             remaining = deadline - time.monotonic()
