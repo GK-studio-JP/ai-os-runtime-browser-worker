@@ -378,7 +378,10 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
                 retry_reason = "malformed"
                 break
 
-        if attempt == 0 and retry_reason:
+        if retry_reason is None:
+            retry_reason = "timeout"
+
+        if attempt == 0:
             if retry_reason == "malformed":
                 retry_instruction = (
                     "\nRETRY: Your previous response was visible but was not valid parseable JSON. "
@@ -386,18 +389,24 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
                     "Escape quotes and backslashes inside JSON strings. "
                     "Do not use Markdown fences, Gemini web search, or external tools."
                 )
-            else:
+            elif retry_reason == "transient":
                 retry_instruction = (
                     "\nRETRY: Do not use Gemini web search or external tools. "
                     "Use only TASK, OBSERVED, and OBSERVATION. Return one JSON object."
+                )
+            else:
+                retry_instruction = (
+                    "\nRETRY: Your previous request produced no visible Gemini response before the timeout. "
+                    "Return exactly one valid JSON object matching the requested launcher schema. "
+                    "Do not use Markdown fences, Gemini web search, or external tools."
                 )
             attempt_prompt = retry_instruction.lstrip()
             continue
         if retry_reason == "malformed":
             raise LauncherError("Gemini returned malformed launcher command after retry")
-        if retry_reason:
+        if retry_reason == "transient":
             raise LauncherError("Gemini logged-out response failed after retry")
-        raise LauncherError("Gemini response timed out")
+        raise LauncherError("Gemini response timed out after retry")
 
     raise LauncherError("Gemini returned no launcher command")
 
