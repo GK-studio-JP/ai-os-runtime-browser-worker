@@ -391,7 +391,7 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
                     "\nRETRY: Do not use Gemini web search or external tools. "
                     "Use only TASK, OBSERVED, and OBSERVATION. Return one JSON object."
                 )
-            attempt_prompt = prompt_text + retry_instruction
+            attempt_prompt = retry_instruction.lstrip()
             continue
         if retry_reason == "malformed":
             raise LauncherError("Gemini returned malformed launcher command after retry")

@@ -244,11 +244,15 @@ class GeminiTransientErrorTests(unittest.TestCase):
                 return {}
 
         relay = FakeRelay()
+        original_prompt = "ORIGINAL-PROMPT-SENTINEL " * 300
         with patch("browser_worker_launcher.time.sleep", return_value=None):
-            result = ask_gemini(relay, 1, "TASK")
+            result = ask_gemini(relay, 1, original_prompt)
 
         self.assertEqual(result, {"kind": "wait", "reason": "retry-ok"})
         self.assertEqual(len(relay.fills), 2)
+        self.assertEqual(relay.fills[0], original_prompt)
+        self.assertNotIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
+        self.assertLess(len(relay.fills[1]), 1000)
         self.assertIn("not valid parseable JSON", relay.fills[1])
         self.assertIn("Escape quotes and backslashes", relay.fills[1])
         self.assertEqual(
