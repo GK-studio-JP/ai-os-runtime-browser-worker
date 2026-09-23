@@ -19,6 +19,7 @@ from ai_os_browser_worker.navigation_policy import (
     validate_mutation_receipt,
 )
 from browser_worker_launcher import (
+    GEMINI_MALFORMED_STABLE_POLLS,
     GEMINI_RESPONSE_TIMEOUT_SECONDS,
     LauncherError,
     _has_new_gemini_response,
@@ -128,7 +129,7 @@ class GeminiTransientErrorTests(unittest.TestCase):
             )
         )
 
-    def test_malformed_response_retries_once_with_strict_json_instruction(self):
+    def test_streaming_partial_response_can_complete_before_malformed_retry(self):
         class FakeRelay:
             def __init__(self):
                 self.fills = []
@@ -150,10 +151,68 @@ class GeminiTransientErrorTests(unittest.TestCase):
                     {
                         "pageText": (
                             'TASK Gemini said {"kind":"browser_action",'
-                            '"action":"fill","args":{"value":"unterminated"'
+                            '"action":"fill","args":{"value":"still streaming"'
                         ),
                         "elements": [],
                     },
+                    {
+                        "pageText": (
+                            'TASK Gemini said '
+                            '{"kind":"wait","reason":"stream-complete"}'
+                        ),
+                        "elements": [],
+                    },
+                ]
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "getPage":
+                    return self.pages.pop(0)
+                if action == "fill":
+                    self.fills.append(args["text"])
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 1, "TASK")
+
+        self.assertEqual(result, {"kind": "wait", "reason": "stream-complete"})
+        self.assertEqual(len(relay.fills), 1)
+        self.assertEqual(
+            sum(1 for action, _ in relay.actions if action == "goto"),
+            1,
+        )
+
+    def test_malformed_response_retries_once_with_strict_json_instruction(self):
+        class FakeRelay:
+            def __init__(self):
+                self.fills = []
+                self.actions = []
+                malformed = {
+                    "pageText": (
+                        'TASK Gemini said {"kind":"browser_action",'
+                        '"action":"fill","args":{"value":"unterminated"'
+                    ),
+                    "elements": [],
+                }
+                self.pages = [
+                    {
+                        "pageText": "",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g1-e2", "label": "Send message"},
+                        ],
+                    },
+                ] + [
+                    dict(malformed)
+                    for _ in range(GEMINI_MALFORMED_STABLE_POLLS)
+                ] + [
                     {
                         "pageText": "",
                         "elements": [

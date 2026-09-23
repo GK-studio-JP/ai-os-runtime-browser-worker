@@ -51,6 +51,7 @@ GEMINI_TRANSIENT_ERRORS = (
     "Sorry, something went wrong. Please try your request again.",
 )
 GEMINI_RESPONSE_TIMEOUT_SECONDS = 90
+GEMINI_MALFORMED_STABLE_POLLS = 3
 AI_OS_CANONICAL_OWNER_ACTOR_ENV = "AI_OS_CANONICAL_OWNER_ACTOR"
 
 
@@ -352,6 +353,8 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
 
         end = time.monotonic() + GEMINI_RESPONSE_TIMEOUT_SECONDS
         retry_reason: str | None = None
+        malformed_snapshot: str | None = None
+        malformed_stable_polls = 0
         while time.monotonic() < end:
             time.sleep(1.5)
             page = relay.command("getPage", {})
@@ -364,6 +367,14 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
                 retry_reason = "transient"
                 break
             if stopped and _has_new_gemini_response(baseline_text, text):
+                response_fragment = text.rsplit("Gemini said", 1)[-1]
+                if response_fragment != malformed_snapshot:
+                    malformed_snapshot = response_fragment
+                    malformed_stable_polls = 1
+                    continue
+                malformed_stable_polls += 1
+                if malformed_stable_polls < GEMINI_MALFORMED_STABLE_POLLS:
+                    continue
                 retry_reason = "malformed"
                 break
 
