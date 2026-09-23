@@ -132,6 +132,7 @@ class GeminiTransientErrorTests(unittest.TestCase):
         class FakeRelay:
             def __init__(self):
                 self.fills = []
+                self.actions = []
                 self.pages = [
                     {
                         "pageText": "",
@@ -176,6 +177,7 @@ class GeminiTransientErrorTests(unittest.TestCase):
                 ]
 
             def command(self, action, args):
+                self.actions.append((action, args))
                 if action == "getPage":
                     return self.pages.pop(0)
                 if action == "fill":
@@ -190,6 +192,11 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(len(relay.fills), 2)
         self.assertIn("not valid parseable JSON", relay.fills[1])
         self.assertIn("Escape quotes and backslashes", relay.fills[1])
+        self.assertEqual(
+            sum(1 for action, _ in relay.actions if action == "goto"),
+            1,
+            "malformed retry must reuse the existing Gemini conversation",
+        )
 
 
 class PlanTests(unittest.TestCase):
