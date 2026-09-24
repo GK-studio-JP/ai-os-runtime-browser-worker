@@ -463,7 +463,10 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
                 retry_instruction = (
                     "\nRETRY: Your previous response was visible but was not valid parseable JSON. "
                     "Return exactly one valid JSON object matching the requested launcher schema. "
-                    "Escape quotes and backslashes inside JSON strings. "
+                    "For action=fill with field=file_contents, args.value must be valid JSON: "
+                    "encode each source literal double quote as \\u0022, each source literal backslash as \\u005c, "
+                    "and each line break as \\n; never emit a raw source double quote inside args.value. "
+                    "Use valid JSON escapes in every other JSON string. "
                     "Do not use Markdown fences, Gemini web search, or external tools."
                 )
             elif retry_reason == "transient":
@@ -576,6 +579,7 @@ OBSERVED={json.dumps(evidence_context, ensure_ascii=False, separators=(",", ":")
 POLICY={mutation_policy}
 Rules: never expose secrets; evidence must come from observed task pages. Do not use Gemini web search or external tools; all required state is in this prompt.
 For click/fill, use the current-generation elementId exactly when possible. Never return click/fill with no target. For GitHub editor fill, if preserving elementId is difficult, args may use field="file_name", field="file_contents", or field="commit_message"; the Runtime resolves only one safe current-generation textbox. For a mutation click, args may use the exact visible label as label/target and the Runtime resolves only one current-generation allowed control.
+For action=fill with field="file_contents", args.value must be a valid JSON string: encode every source literal double quote as \\u0022, every source literal backslash as \\u005c, and each line break as \\n; never place a raw source double quote inside args.value.
 If objective/acceptance asks to add, implement, fix, update, or change something and observed pages do not already prove it exists, perform the smallest authorized branch/PR mutation before finish. README/repository listings/unrelated or pre-existing PRs are not implementation evidence.
 For GitHub implementation, do not browse /pulls first. Navigate directly to the edit URL for an existing path or the new-file URL from TASK.mutation_entry_hint. On a new-file page first fill field="file_name", then fill field="file_contents", select the new-branch radio, Propose changes, then Create pull request.
 If TASK.editor_progress.next_required is "fill:file_contents", the file name is already set. Do not fill file_name again; the next mutation must fill field="file_contents" with the complete source text.
