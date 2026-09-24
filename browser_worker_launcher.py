@@ -938,7 +938,7 @@ def run_worker(
             try:
                 action, args = _validate_model_action(
                     model_command,
-                    observation,
+                    page,
                     task_payload=task_payload,
                     issue_url=issue_url,
                     mutation_receipt=mutation_receipt,
