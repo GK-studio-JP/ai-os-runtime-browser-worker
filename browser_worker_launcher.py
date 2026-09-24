@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
 import os
 import re
 import sys
 import time
+import urllib.parse
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -305,6 +308,177 @@ def _editor_source_text(element: dict[str, Any] | None) -> str:
     return text if isinstance(text, str) else ""
 
 
+def _github_edit_target(url: str) -> tuple[str, str, str] | None:
+    value = str(url or "").strip()
+    parsed = urllib.parse.urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise LauncherError("GitHub edit URL has an invalid port") from exc
+    if (
+        parsed.scheme != "https"
+        or (parsed.hostname or "").lower() != "github.com"
+        or port not in (None, 443)
+    ):
+        return None
+
+    raw_parts = [part for part in parsed.path.split("/") if part]
+    if len(raw_parts) < 5 or raw_parts[2] != "edit":
+        return None
+    parts = [urllib.parse.unquote(part) for part in raw_parts]
+    owner, repo, ref = parts[0], parts[1], parts[3]
+    path_parts = parts[4:]
+    for part in [owner, repo, ref, *path_parts]:
+        if (
+            not part
+            or part in {".", ".."}
+            or "/" in part
+            or "\\" in part
+        ):
+            raise LauncherError("GitHub edit URL contains unsupported path segments")
+    return f"{owner}/{repo}", ref, "/".join(path_parts)
+
+
+def _enrich_authoritative_editor_source(
+    page: dict[str, Any],
+    *,
+    token: str | None,
+    repository: str | None,
+) -> dict[str, Any]:
+    target = _github_edit_target(str(page.get("url") or ""))
+    if target is None or not repository:
+        return page
+    target_repository, ref, path = target
+    if target_repository != repository:
+        return page
+
+    editors = [
+        element
+        for element in page.get("elements") or []
+        if _is_file_contents_editor(element)
+    ]
+    if not editors:
+        return page
+    if len(editors) != 1:
+        raise LauncherError(
+            "GitHub edit page must expose exactly one file editor for authoritative source"
+        )
+
+    branch_label = f"{ref} branch"
+    branch_verified = any(
+        element.get("role") == "button"
+        and str(element.get("label") or "") == branch_label
+        for element in page.get("elements") or []
+    )
+    if not branch_verified:
+        raise LauncherError(
+            "GitHub edit ref could not be verified from the current page"
+        )
+
+    encoded_path = urllib.parse.quote(path, safe="/")
+    encoded_ref = urllib.parse.quote(ref, safe="")
+    data = github(
+        f"/repos/{repository}/contents/{encoded_path}?ref={encoded_ref}",
+        token=token,
+    )
+    if not isinstance(data, dict):
+        raise LauncherError("GitHub contents response is not one file object")
+    if data.get("type") != "file":
+        raise LauncherError("GitHub contents target is not a regular file")
+    if data.get("encoding") != "base64":
+        raise LauncherError("GitHub contents target is not base64 encoded")
+    if str(data.get("path") or "") != path:
+        raise LauncherError("GitHub contents path does not match the edit target")
+
+    size = data.get("size")
+    if type(size) is not int or size < 0:
+        raise LauncherError("GitHub contents target has an invalid size")
+    if size > EDITOR_CONTENT_MAX_CHARS:
+        raise LauncherError(
+            "GitHub file exceeds the exact-source Browser Worker limit"
+        )
+
+    source_sha = str(data.get("sha") or "")
+    if SHA40_RE.fullmatch(source_sha) is None:
+        raise LauncherError("GitHub contents target is missing an immutable blob SHA")
+
+    encoded_content = data.get("content")
+    if not isinstance(encoded_content, str):
+        raise LauncherError("GitHub contents target is missing base64 content")
+    try:
+        source_bytes = base64.b64decode(
+            "".join(encoded_content.split()),
+            validate=True,
+        )
+    except (ValueError, binascii.Error) as exc:
+        raise LauncherError("GitHub contents target has invalid base64 content") from exc
+    if len(source_bytes) != size:
+        raise LauncherError("GitHub contents size does not match decoded content")
+    try:
+        source = source_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise LauncherError("GitHub file is not valid UTF-8 source text") from exc
+    if len(source) > EDITOR_CONTENT_MAX_CHARS:
+        raise LauncherError(
+            "GitHub file exceeds the exact-source Browser Worker limit"
+        )
+
+    editor_id = str(editors[0].get("id") or "")
+    enriched_elements: list[dict[str, Any]] = []
+    for element in page.get("elements") or []:
+        enriched = dict(element)
+        if str(element.get("id") or "") == editor_id:
+            enriched["value"] = source
+            enriched["editorSourceKind"] = "github_contents_api"
+            enriched["editorSourceSha"] = source_sha
+            enriched["editorSourceRef"] = ref
+            enriched["editorSourcePath"] = path
+        enriched_elements.append(enriched)
+
+    enriched_page = dict(page)
+    enriched_page["elements"] = enriched_elements
+    return enriched_page
+
+
+def _require_stable_editor_source(
+    action: str,
+    original_args: dict[str, Any],
+    original_page: dict[str, Any],
+    refreshed_args: dict[str, Any],
+    fresh_page: dict[str, Any],
+) -> None:
+    if action != "fill":
+        return
+    original = next(
+        (
+            element
+            for element in original_page.get("elements") or []
+            if element.get("id") == original_args.get("elementId")
+        ),
+        None,
+    )
+    if not original or not _is_file_contents_editor(original):
+        return
+    fresh = next(
+        (
+            element
+            for element in fresh_page.get("elements") or []
+            if element.get("id") == refreshed_args.get("elementId")
+        ),
+        None,
+    )
+    if not fresh or not _is_file_contents_editor(fresh):
+        raise LauncherError("file editor disappeared before mutation")
+    if (
+        original.get("editorSourceKind") != "github_contents_api"
+        or fresh.get("editorSourceKind") != "github_contents_api"
+        or original.get("editorSourceSha") != fresh.get("editorSourceSha")
+    ):
+        raise LauncherError(
+            "file editor authoritative source changed before mutation; re-observe required"
+        )
+
+
 def _require_complete_editor_observation(
     action: str,
     args: dict[str, Any],
@@ -325,6 +499,11 @@ def _require_complete_editor_observation(
     )
     if not source or not _is_file_contents_editor(source):
         return
+    existing_target = _github_edit_target(str(page.get("url") or ""))
+    if existing_target is not None and source.get("editorSourceKind") != "github_contents_api":
+        raise LauncherError(
+            "file editor authoritative source is unavailable; full-file fill denied"
+        )
     if not isinstance(source.get("value"), str):
         raise LauncherError(
             "file editor exact source is unavailable; full-file fill denied"
@@ -341,6 +520,10 @@ def _require_complete_editor_observation(
     if reduced is None:
         raise LauncherError(
             "file editor source is missing from model observation; full-file fill denied"
+        )
+    if existing_target is not None and reduced.get("editorSourceKind") != "github_contents_api":
+        raise LauncherError(
+            "file editor authoritative source is unavailable; full-file fill denied"
         )
     if not isinstance(reduced.get("value"), str):
         raise LauncherError(
@@ -368,6 +551,8 @@ def reduce_observation(
         "text",
         "label",
         "value",
+        "editorSourceKind",
+        "editorSourceSha",
     )
     useful_roles = {"button", "link", "textbox", "combobox", "checkbox", "radio"}
     useful = [
@@ -934,6 +1119,12 @@ def run_worker(
 
             relay.command("switchPage", {"index": 0})
             page = relay.command("getPage", {})
+            if not source_mutation_performed:
+                page = _enrich_authoritative_editor_source(
+                    page,
+                    token=token,
+                    repository=repository,
+                )
             _record_page_evidence(ledger, page)
             observation = reduce_observation(page)
             model_command = ask_gemini(
@@ -1043,9 +1234,23 @@ def run_worker(
             guard_page = page
             if action in {"click", "fill"}:
                 fresh_page = relay.command("getPage", {})
+                if not source_mutation_performed:
+                    fresh_page = _enrich_authoritative_editor_source(
+                        fresh_page,
+                        token=token,
+                        repository=repository,
+                    )
                 _record_page_evidence(ledger, fresh_page)
+                original_args = dict(args)
                 try:
                     args = refresh_element_args(action, args, page, fresh_page)
+                    _require_stable_editor_source(
+                        action,
+                        original_args,
+                        page,
+                        args,
+                        fresh_page,
+                    )
                 except LauncherError as exc:
                     feedback = str(exc)
                     continue
