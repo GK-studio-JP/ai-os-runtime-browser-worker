@@ -274,8 +274,9 @@ def _semantic_element_args(
             candidates = [
                 element
                 for element in candidates
-                if str(element.get("label") or "").lower().startswith(
-                    "editing file contents"
+                if re.match(
+                    r"^editing(?:\s+.*?)?\s+file contents(?:\s|$)",
+                    str(element.get("label") or "").lower(),
                 )
             ]
         elif field in {"commit_message", "message"}:
