@@ -55,6 +55,11 @@ GEMINI_RETRY_SETTLE_TIMEOUT_SECONDS = 10
 GEMINI_RETRY_SETTLE_POLL_SECONDS = 0.5
 GEMINI_MALFORMED_STABLE_POLLS = 3
 AI_OS_CANONICAL_OWNER_ACTOR_ENV = "AI_OS_CANONICAL_OWNER_ACTOR"
+EDITOR_CONTENT_MAX_CHARS = 12000
+EDITOR_CONTENT_LABEL_RE = re.compile(
+    r"^editing(?:\s+.*?)?\s+file contents(?:\s|$)",
+    re.IGNORECASE,
+)
 
 
 def canonical_owner_actor() -> str:
@@ -283,6 +288,66 @@ def _initial_artifact_snapshots(
     return pull_urls, workflow_urls
 
 
+def _is_file_contents_editor(element: dict[str, Any]) -> bool:
+    return (
+        element.get("role") == "textbox"
+        and EDITOR_CONTENT_LABEL_RE.match(str(element.get("label") or "")) is not None
+    )
+
+
+def _editor_source_text(element: dict[str, Any] | None) -> str:
+    if not isinstance(element, dict):
+        return ""
+    text = element.get("text")
+    if isinstance(text, str) and text:
+        return text
+    value = element.get("value")
+    return value if isinstance(value, str) else ""
+
+
+def _require_complete_editor_observation(
+    action: str,
+    args: dict[str, Any],
+    page: dict[str, Any],
+    observation: dict[str, Any],
+) -> None:
+    if action != "fill":
+        return
+
+    element_id = str(args.get("elementId") or "")
+    source = next(
+        (
+            element
+            for element in page.get("elements") or []
+            if element.get("id") == element_id
+        ),
+        None,
+    )
+    if not source or not _is_file_contents_editor(source):
+        return
+
+    reduced = next(
+        (
+            element
+            for element in observation.get("elements") or []
+            if element.get("id") == element_id
+        ),
+        None,
+    )
+    if reduced is None:
+        raise LauncherError(
+            "file editor source is missing from model observation; full-file fill denied"
+        )
+
+    if (
+        reduced.get("editorContentTruncated") is True
+        or _editor_source_text(source) != _editor_source_text(reduced)
+    ):
+        raise LauncherError(
+            "file editor source is incomplete in model observation; full-file fill denied"
+        )
+
+
 def reduce_observation(
     page: dict[str, Any],
     *,
@@ -330,10 +395,20 @@ def reduce_observation(
         href = attributes.get("href")
         if isinstance(href, str) and href:
             compact["href"] = href
+        is_editor = _is_file_contents_editor(element)
         for key in ("text", "label", "value"):
             value = compact.get(key)
-            if isinstance(value, str) and len(value) > 120:
-                compact[key] = value[:120]
+            if not isinstance(value, str):
+                continue
+            limit = (
+                EDITOR_CONTENT_MAX_CHARS
+                if is_editor and key in {"text", "value"}
+                else 120
+            )
+            if len(value) > limit:
+                compact[key] = value[:limit]
+                if is_editor and key in {"text", "value"}:
+                    compact["editorContentTruncated"] = True
         elements.append(compact)
     return {
         "url": page.get("url"),
@@ -942,6 +1017,12 @@ def run_worker(
                     task_payload=task_payload,
                     issue_url=issue_url,
                     mutation_receipt=mutation_receipt,
+                )
+                _require_complete_editor_observation(
+                    action,
+                    args,
+                    page,
+                    observation,
                 )
             except LauncherError as exc:
                 feedback = str(exc)
