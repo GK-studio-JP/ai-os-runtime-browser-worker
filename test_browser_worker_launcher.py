@@ -1722,6 +1722,100 @@ class FinishEvidenceTests(unittest.TestCase):
 
 
 class ObservationTests(unittest.TestCase):
+    def test_refresh_uses_full_source_page_after_reduced_semantic_resolution(self):
+        full_label = (
+            "Editing browser_worker_launcher.py file contents "
+            "Use Control + Shift + m to toggle the tab key moving focus. "
+            "Alternatively, use esc then tab to move to the next interactive "
+            "element on the page."
+        )
+        source_page = {
+            "url": (
+                "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker/"
+                "edit/main/browser_worker_launcher.py"
+            ),
+            "generation": 85,
+            "elements": [
+                {
+                    "id": "g85-e183",
+                    "role": "textbox",
+                    "label": full_label,
+                    "editable": True,
+                }
+            ],
+        }
+        observation = reduce_observation(source_page)
+        self.assertEqual(len(observation["elements"][0]["label"]), 120)
+        self.assertNotEqual(observation["elements"][0]["label"], full_label)
+
+        action, args = _validate_model_action(
+            {
+                "action": "fill",
+                "args": {"field": "file_contents", "text": "updated\n"},
+            },
+            observation,
+            task_payload={
+                "repository": "GK-studio-JP/ai-os-runtime-browser-worker",
+            },
+            mutation_receipt=mutation_receipt(),
+        )
+        fresh_page = {
+            "generation": 86,
+            "elements": [
+                {
+                    "id": "g86-e183",
+                    "role": "textbox",
+                    "label": full_label,
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(LauncherError, "0 matches"):
+            refresh_element_args(action, args, observation, fresh_page)
+
+        refreshed = refresh_element_args(action, args, source_page, fresh_page)
+        self.assertEqual(refreshed["elementId"], "g86-e183")
+
+    def test_refresh_from_full_source_page_fails_closed_on_ambiguous_match(self):
+        full_label = (
+            "Editing browser_worker_launcher.py file contents "
+            "Use Control + Shift + m to toggle the tab key moving focus. "
+            "Alternatively, use esc then tab to move to the next interactive "
+            "element on the page."
+        )
+        source_page = {
+            "generation": 85,
+            "elements": [
+                {
+                    "id": "g85-e183",
+                    "role": "textbox",
+                    "label": full_label,
+                }
+            ],
+        }
+        fresh_page = {
+            "generation": 86,
+            "elements": [
+                {
+                    "id": "g86-e183",
+                    "role": "textbox",
+                    "label": full_label,
+                },
+                {
+                    "id": "g86-e184",
+                    "role": "textbox",
+                    "label": full_label,
+                },
+            ],
+        }
+        with self.assertRaisesRegex(LauncherError, "2 matches"):
+            refresh_element_args(
+                "fill",
+                {"elementId": "g85-e183", "text": "updated\n"},
+                source_page,
+                fresh_page,
+            )
+
     def test_reduce_observation_preserves_link_href_for_policy(self):
         page = {
             "url": "https://github.com/GK-studio-JP/ai-os-runtime-browser-worker",

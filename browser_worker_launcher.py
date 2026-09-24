@@ -953,7 +953,7 @@ def run_worker(
                 fresh_page = relay.command("getPage", {})
                 _record_page_evidence(ledger, fresh_page)
                 try:
-                    args = refresh_element_args(action, args, observation, fresh_page)
+                    args = refresh_element_args(action, args, page, fresh_page)
                 except LauncherError as exc:
                     feedback = str(exc)
                     continue
