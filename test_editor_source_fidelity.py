@@ -8,7 +8,7 @@ from browser_worker_launcher import (
 )
 
 
-def editor_page(text: str) -> dict:
+def editor_page(text: str, *, value: str | None = None) -> dict:
     return {
         "url": (
             "https://github.com/GK-studio-JP/ai-os-context/"
@@ -26,6 +26,7 @@ def editor_page(text: str) -> dict:
                 ),
                 "editable": True,
                 "text": text,
+                "value": value,
             }
         ],
     }
@@ -39,6 +40,32 @@ class EditorSourceFidelityTests(unittest.TestCase):
 
         self.assertEqual(reduced["elements"][0]["text"], source)
         self.assertNotIn("editorContentTruncated", reduced["elements"][0])
+        _require_complete_editor_observation(
+            "fill",
+            {"elementId": "g80-e183", "text": "replacement"},
+            page,
+            reduced,
+        )
+
+    def test_exact_multiline_editor_value_wins_over_lossy_text(self):
+        source = (
+            "name: projection snapshot\n"
+            "on:\n"
+            "  workflow_dispatch:\n"
+            "jobs:\n"
+            "  snapshot:\n"
+            "    runs-on: ubuntu-latest\n"
+        )
+        page = editor_page(
+            "name: projection snapshot on: workflow_dispatch: jobs: snapshot:",
+            value=source,
+        )
+        reduced = reduce_observation(page)
+        editor = reduced["elements"][0]
+
+        self.assertEqual(editor["value"], source)
+        self.assertNotIn("text", editor)
+        self.assertNotIn("editorContentTruncated", editor)
         _require_complete_editor_observation(
             "fill",
             {"elementId": "g80-e183", "text": "replacement"},
@@ -63,16 +90,15 @@ class EditorSourceFidelityTests(unittest.TestCase):
         reduced = reduce_observation(page)
         self.assertEqual(reduced["elements"][0]["text"], "a" * 120)
 
-    def test_oversized_editor_source_is_denied_fail_closed(self):
+    def test_oversized_editor_value_sentinel_is_denied_fail_closed(self):
         source = "z" * (EDITOR_CONTENT_MAX_CHARS + 1)
-        page = editor_page(source)
+        page = editor_page("z" * 300, value=source)
         reduced = reduce_observation(page)
+        editor = reduced["elements"][0]
 
-        self.assertEqual(
-            len(reduced["elements"][0]["text"]),
-            EDITOR_CONTENT_MAX_CHARS,
-        )
-        self.assertTrue(reduced["elements"][0]["editorContentTruncated"])
+        self.assertEqual(len(editor["value"]), EDITOR_CONTENT_MAX_CHARS)
+        self.assertNotIn("text", editor)
+        self.assertTrue(editor["editorContentTruncated"])
         with self.assertRaisesRegex(
             LauncherError,
             "file editor source is incomplete in model observation",
