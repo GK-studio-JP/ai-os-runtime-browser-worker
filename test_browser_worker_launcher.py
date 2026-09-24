@@ -251,8 +251,8 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(result, {"kind": "wait", "reason": "retry-ok"})
         self.assertEqual(len(relay.fills), 2)
         self.assertEqual(relay.fills[0], original_prompt)
-        self.assertNotIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
-        self.assertLess(len(relay.fills[1]), 1000)
+        self.assertIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
+        self.assertGreater(len(relay.fills[1]), len(original_prompt))
         self.assertIn("not valid parseable JSON", relay.fills[1])
         self.assertIn("field=file_contents", relay.fills[1])
         self.assertIn("\\u0022", relay.fills[1])
@@ -329,8 +329,8 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(result, {"kind": "wait", "reason": "timeout-retry-ok"})
         self.assertEqual(len(relay.fills), 2)
         self.assertEqual(relay.fills[0], original_prompt)
-        self.assertNotIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
-        self.assertLess(len(relay.fills[1]), 1000)
+        self.assertIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
+        self.assertGreater(len(relay.fills[1]), len(original_prompt))
         self.assertIn("no visible Gemini response before the timeout", relay.fills[1])
         self.assertEqual(
             sum(1 for action, _ in relay.actions if action == "goto"),
@@ -397,8 +397,8 @@ class GeminiTransientErrorTests(unittest.TestCase):
 
         self.assertEqual(len(relay.fills), 2)
         self.assertEqual(relay.fills[0], original_prompt)
-        self.assertNotIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
-        self.assertLess(len(relay.fills[1]), 1000)
+        self.assertIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
+        self.assertGreater(len(relay.fills[1]), len(original_prompt))
         self.assertIn("no visible Gemini response before the timeout", relay.fills[1])
         self.assertEqual(
             sum(1 for action, _ in relay.actions if action == "goto"),
@@ -477,8 +477,8 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(result, {"kind": "wait", "reason": "stopped-and-retried"})
         self.assertEqual(len(relay.fills), 2)
         self.assertEqual(relay.fills[0], original_prompt)
-        self.assertNotIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
-        self.assertLess(len(relay.fills[1]), 1000)
+        self.assertIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
+        self.assertGreater(len(relay.fills[1]), len(original_prompt))
         stop_index = next(
             index
             for index, (action, args) in enumerate(relay.actions)
@@ -630,8 +630,8 @@ class GeminiTransientErrorTests(unittest.TestCase):
 
         self.assertEqual(len(relay.fills), 2)
         self.assertEqual(relay.fills[0], original_prompt)
-        self.assertNotIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
-        self.assertLess(len(relay.fills[1]), 1000)
+        self.assertIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
+        self.assertGreater(len(relay.fills[1]), len(original_prompt))
         self.assertEqual(
             sum(1 for action, _ in relay.actions if action == "goto"),
             1,
