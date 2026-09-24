@@ -298,11 +298,11 @@ def _is_file_contents_editor(element: dict[str, Any]) -> bool:
 def _editor_source_text(element: dict[str, Any] | None) -> str:
     if not isinstance(element, dict):
         return ""
-    text = element.get("text")
-    if isinstance(text, str) and text:
-        return text
     value = element.get("value")
-    return value if isinstance(value, str) else ""
+    if isinstance(value, str):
+        return value
+    text = element.get("text")
+    return text if isinstance(text, str) else ""
 
 
 def _require_complete_editor_observation(
@@ -396,6 +396,8 @@ def reduce_observation(
         if isinstance(href, str) and href:
             compact["href"] = href
         is_editor = _is_file_contents_editor(element)
+        if is_editor and isinstance(compact.get("value"), str):
+            compact.pop("text", None)
         for key in ("text", "label", "value"):
             value = compact.get(key)
             if not isinstance(value, str):
