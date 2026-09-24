@@ -33,19 +33,50 @@ def editor_page(text: str, *, value: str | None = None) -> dict:
 
 
 class EditorSourceFidelityTests(unittest.TestCase):
-    def test_complete_editor_source_survives_reduction(self):
+    def test_complete_editor_value_survives_reduction(self):
         source = "x" * 3074
-        page = editor_page(source)
+        page = editor_page("x" * 300, value=source)
         reduced = reduce_observation(page)
+        editor = reduced["elements"][0]
 
-        self.assertEqual(reduced["elements"][0]["text"], source)
-        self.assertNotIn("editorContentTruncated", reduced["elements"][0])
+        self.assertEqual(editor["value"], source)
+        self.assertNotIn("text", editor)
+        self.assertNotIn("editorContentTruncated", editor)
         _require_complete_editor_observation(
             "fill",
             {"elementId": "g80-e183", "text": "replacement"},
             page,
             reduced,
         )
+
+    def test_blank_editor_value_is_preserved_as_exact_source(self):
+        page = editor_page("lossy fallback", value="")
+        reduced = reduce_observation(page)
+        editor = reduced["elements"][0]
+
+        self.assertEqual(editor["value"], "")
+        self.assertNotIn("text", editor)
+        _require_complete_editor_observation(
+            "fill",
+            {"elementId": "g80-e183", "text": "replacement"},
+            page,
+            reduced,
+        )
+
+    def test_missing_exact_editor_value_is_denied_fail_closed(self):
+        page = editor_page("lossy 300-character-style text", value=None)
+        reduced = reduce_observation(page)
+
+        with self.assertRaisesRegex(
+            LauncherError,
+            "file editor exact source is unavailable",
+        ):
+            _require_complete_editor_observation(
+                "fill",
+                {"elementId": "g80-e183", "text": "replacement"},
+                page,
+                reduced,
+            )
 
     def test_exact_multiline_editor_value_wins_over_lossy_text(self):
         source = (
