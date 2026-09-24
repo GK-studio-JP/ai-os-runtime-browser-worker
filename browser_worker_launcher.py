@@ -325,6 +325,10 @@ def _require_complete_editor_observation(
     )
     if not source or not _is_file_contents_editor(source):
         return
+    if not isinstance(source.get("value"), str):
+        raise LauncherError(
+            "file editor exact source is unavailable; full-file fill denied"
+        )
 
     reduced = next(
         (
@@ -338,10 +342,14 @@ def _require_complete_editor_observation(
         raise LauncherError(
             "file editor source is missing from model observation; full-file fill denied"
         )
+    if not isinstance(reduced.get("value"), str):
+        raise LauncherError(
+            "file editor exact source is unavailable; full-file fill denied"
+        )
 
     if (
         reduced.get("editorContentTruncated") is True
-        or _editor_source_text(source) != _editor_source_text(reduced)
+        or source["value"] != reduced["value"]
     ):
         raise LauncherError(
             "file editor source is incomplete in model observation; full-file fill denied"
@@ -396,7 +404,8 @@ def reduce_observation(
         if isinstance(href, str) and href:
             compact["href"] = href
         is_editor = _is_file_contents_editor(element)
-        if is_editor and isinstance(compact.get("value"), str):
+        if is_editor and isinstance(element.get("value"), str):
+            compact["value"] = element["value"]
             compact.pop("text", None)
         for key in ("text", "label", "value"):
             value = compact.get(key)
