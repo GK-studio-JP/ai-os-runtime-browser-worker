@@ -62,6 +62,69 @@ class SemanticMutationTargetTests(unittest.TestCase):
             {"elementId": "g7-e20", "text": "print('guard')\n"},
         )
 
+    def test_resolves_explicit_file_contents_field_on_existing_file(self):
+        page = {
+            "generation": 184,
+            "url": (
+                "https://github.com/GK-studio-JP/ai-os-context/edit/main/"
+                ".github/workflows/my%20workflow%20snapshot.yml"
+            ),
+            "elements": [
+                {
+                    "id": "g184-e183",
+                    "role": "textbox",
+                    "label": (
+                        "Editing my workflow snapshot.yml file contents "
+                        "Use Control + Shift + m to toggle the tab key moving focus."
+                    ),
+                },
+                {
+                    "id": "g184-e184",
+                    "role": "textbox",
+                    "label": "Editing commit message...",
+                },
+            ],
+        }
+        args = _semantic_element_args(
+            "fill",
+            {"field": "file_contents", "text": "name: projection snapshot\n"},
+            page,
+        )
+        self.assertEqual(
+            args,
+            {
+                "elementId": "g184-e183",
+                "text": "name: projection snapshot\n",
+            },
+        )
+
+    def test_rejects_unrelated_textbox_for_file_contents(self):
+        page = {
+            "generation": 9,
+            "url": (
+                "https://github.com/GK-studio-JP/ai-os-context/edit/main/"
+                ".github/workflows/snapshot.yml"
+            ),
+            "elements": [
+                {
+                    "id": "g9-e1",
+                    "role": "textbox",
+                    "label": "Editing commit message...",
+                },
+                {
+                    "id": "g9-e2",
+                    "role": "textbox",
+                    "label": "Pull request description",
+                },
+            ],
+        }
+        with self.assertRaisesRegex(LauncherError, "resolved to 0"):
+            _semantic_element_args(
+                "fill",
+                {"field": "file_contents", "text": "updated\n"},
+                page,
+            )
+
     def test_normalizes_value_alias_for_explicit_fill_field(self):
         args = _semantic_element_args(
             "fill",
