@@ -254,7 +254,11 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertNotIn("ORIGINAL-PROMPT-SENTINEL", relay.fills[1])
         self.assertLess(len(relay.fills[1]), 1000)
         self.assertIn("not valid parseable JSON", relay.fills[1])
-        self.assertIn("Escape quotes and backslashes", relay.fills[1])
+        self.assertIn("field=file_contents", relay.fills[1])
+        self.assertIn("\\u0022", relay.fills[1])
+        self.assertIn("\\u005c", relay.fills[1])
+        self.assertIn("\\n", relay.fills[1])
+        self.assertIn("never emit a raw source double quote", relay.fills[1])
         self.assertEqual(
             sum(1 for action, _ in relay.actions if action == "goto"),
             1,
@@ -1821,6 +1825,11 @@ class ObservationTests(unittest.TestCase):
         self.assertIn('"source_mutation_performed":false', text)
         self.assertIn("do not browse /pulls first", text)
         self.assertIn("exact observed 40-character SHA alone", text)
+        self.assertIn('field="file_contents"', text)
+        self.assertIn("\\u0022", text)
+        self.assertIn("\\u005c", text)
+        self.assertIn("\\n", text)
+        self.assertIn("never place a raw source double quote", text)
 
     def test_prompt_marks_new_file_editor_progress_after_filename(self):
         task_payload = {
