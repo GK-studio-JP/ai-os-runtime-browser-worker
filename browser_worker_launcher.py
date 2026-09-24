@@ -480,7 +480,7 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
                     "Return exactly one valid JSON object matching the requested launcher schema. "
                     "Do not use Markdown fences, Gemini web search, or external tools."
                 )
-            attempt_prompt = retry_instruction.lstrip()
+            attempt_prompt = prompt_text + "\n\n" + retry_instruction.lstrip()
             continue
         if retry_reason == "malformed":
             raise LauncherError("Gemini returned malformed launcher command after retry")
