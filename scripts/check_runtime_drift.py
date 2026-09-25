@@ -55,6 +55,19 @@ def load_manifest(path: Path) -> dict[str, Any]:
 
     if not isinstance(value, dict):
         raise DriftError("manifest root must be an object")
+
+    expected_root_keys = {
+        "schema",
+        "canonical_repository",
+        "canonical_commit",
+        "files",
+    }
+    if set(value) != expected_root_keys:
+        raise DriftError(
+            "manifest root must contain exactly "
+            f"{sorted(expected_root_keys)}"
+        )
+
     if value.get("schema") != SCHEMA:
         raise DriftError(f"unsupported manifest schema: {value.get('schema')!r}")
     if value.get("canonical_repository") != CANONICAL_REPOSITORY:
@@ -139,6 +152,8 @@ def load_manifest(path: Path) -> dict[str, Any]:
 def _read_file(root: Path, relative: str, *, side: str) -> bytes:
     path = root.joinpath(*PurePosixPath(relative).parts)
     try:
+        if path.is_symlink():
+            raise DriftError(f"{relative}: {side} file must not be a symlink")
         if not path.is_file():
             raise DriftError(f"{relative}: {side} file is missing")
         return path.read_bytes()
