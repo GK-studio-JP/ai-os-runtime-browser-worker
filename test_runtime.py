@@ -12,14 +12,33 @@ def _digest(value):
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def capsule(through=10, source_fp="sha256:source"):
+def capsule(
+    through=10,
+    source_fp="sha256:source",
+    task_spec_fp="sha256:task-spec",
+    state="open",
+    event_count=0,
+):
     value = {
         "schema": "ai-os-context-capsule:v1",
         "authoritative": False,
         "fingerprint": "cap-123",
-        "source": {"through_comment_id": through, "source_fingerprint": source_fp},
-        "identity": {"process": "PROC-RUNTIME", "target_repository": "GK-studio-JP/ai-os-runtime"},
-        "task": {"id": "#123", "objective": "exercise runtime"},
+        "source": {
+            "canonical_through_comment_id": through,
+            "through_comment_id": through,
+            "task_spec_fingerprint": task_spec_fp,
+            "source_fingerprint": source_fp,
+        },
+        "identity": {
+            "process": "PROC-RUNTIME",
+            "target_repository": "GK-studio-JP/ai-os-runtime",
+        },
+        "task": {
+            "id": "#123",
+            "objective": "exercise runtime",
+            "state": state,
+        },
+        "replay": {"canonical_event_count": event_count},
     }
     value["content_digest"] = _digest(value)
     return value
@@ -50,13 +69,26 @@ def boot():
     }
 
 
-def fresh(state="open", owner=None, through=10, safe=True, source_fp="sha256:source"):
+def fresh(
+    state="open",
+    owner=None,
+    through=10,
+    safe=True,
+    source_fp="sha256:source",
+    task_spec_fp="sha256:task-spec",
+    event_count=0,
+    latest_owner_event=None,
+):
     return {
         "task": "#123",
         "state": state,
         "history_safe": safe,
         "owner": owner,
+        "canonical_through_comment_id": through,
         "through_comment_id": through,
+        "canonical_event_count": event_count,
+        "latest_owner_event": latest_owner_event,
+        "task_spec_fingerprint": task_spec_fp,
         "source_fingerprint": source_fp,
     }
 
@@ -96,6 +128,75 @@ class RuntimeTests(unittest.TestCase):
     def test_matching_live_owner_is_ready(self):
         p = preflight(boot(), capsule(), fresh(state="claimed", owner="worker-1"), worker_id="worker-1")
         self.assertEqual(p["status"], "READY")
+
+    def test_claim_append_replay_reaches_ready_and_prepare(self):
+        first = preflight(boot(), capsule(), fresh(), worker_id="worker-1")
+        self.assertEqual(first["status"], "CLAIM_REQUIRED")
+
+        after_claim = fresh(
+            state="claimed",
+            owner="worker-1",
+            through=11,
+            source_fp="sha256:source-after-claim",
+            event_count=1,
+            latest_owner_event={
+                "type": "CLAIM",
+                "agent_id": "worker-1",
+                "ref": "comment:11",
+            },
+        )
+        second = preflight(boot(), capsule(), after_claim, worker_id="worker-1")
+        self.assertEqual(second["status"], "READY")
+        self.assertEqual(second["reason_code"], "ownership_confirmed_after_claim")
+        self.assertEqual(second["canonical_through_comment_id"], 11)
+        self.assertEqual(
+            second["canonical_source_fingerprint"],
+            "sha256:source-after-claim",
+        )
+
+        invocation = prepare(boot(), capsule(), second, driver="manual")
+        self.assertEqual(invocation["worker_id"], "worker-1")
+        self.assertEqual(invocation["canonical_through_comment_id"], 11)
+
+    def test_claim_transition_rejects_extra_canonical_history(self):
+        after_claim_and_extra = fresh(
+            state="claimed",
+            owner="worker-1",
+            through=12,
+            source_fp="sha256:source-after-extra",
+            event_count=2,
+            latest_owner_event={
+                "type": "CLAIM",
+                "agent_id": "worker-1",
+                "ref": "comment:12",
+            },
+        )
+        p = preflight(
+            boot(),
+            capsule(),
+            after_claim_and_extra,
+            worker_id="worker-1",
+        )
+        self.assertEqual(p["status"], "STALE_CONTEXT")
+        self.assertEqual(p["reason_code"], "canonical_history_changed")
+
+    def test_claim_transition_rejects_task_spec_change(self):
+        after_claim = fresh(
+            state="claimed",
+            owner="worker-1",
+            through=11,
+            source_fp="sha256:source-after-claim",
+            task_spec_fp="sha256:changed-task-spec",
+            event_count=1,
+            latest_owner_event={
+                "type": "CLAIM",
+                "agent_id": "worker-1",
+                "ref": "comment:11",
+            },
+        )
+        p = preflight(boot(), capsule(), after_claim, worker_id="worker-1")
+        self.assertEqual(p["status"], "STALE_CONTEXT")
+        self.assertEqual(p["reason_code"], "task_spec_changed")
 
     def test_tampered_capsule_content_fails_closed(self):
         value = capsule()
