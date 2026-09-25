@@ -112,6 +112,20 @@ Worker Boot Bundle
 
 Keeping that baseline in the clone makes it possible to compare the two execution approaches without removing the original implementation.
 
+### Runtime provenance and drift policy
+
+`runtime-source.json` is the fail-closed provenance lock for inherited Runtime contract files. It pins the canonical repository, an immutable 40-hex Runtime commit, and the exact Git blob object ID expected on both the canonical and Browser Worker sides.
+
+Files marked `identical` must match byte-for-byte. A file may be marked `forked` only when the manifest pins both distinct blob IDs and records a non-empty rationale. The current intentional fork is `driver_runner.py`, where the Browser Worker tolerates `BrokenPipeError` if a child exits before consuming stdin while preserving authoritative return-code handling and suppressing child stderr.
+
+CI checks out the canonical Runtime at the commit declared by the manifest, never a floating branch or tag, then runs:
+
+```sh
+python scripts/check_runtime_drift.py --canonical-root .runtime-canonical --local-root .
+```
+
+The checker validates the manifest schema and file set, rejects unsafe paths and unknown fields/modes, recomputes Git blob IDs from file bytes, rejects symlinked contract files, and fails when either side changes without an explicit lock update.
+
 ## Integration status
 
 Implemented and wired into the control plane:

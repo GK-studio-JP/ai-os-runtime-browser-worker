@@ -130,6 +130,9 @@ def preflight(
     if not worker_id.strip():
         raise ValueError("worker_id is required")
 
+    fresh_through = fresh.get("canonical_through_comment_id", fresh.get("through_comment_id"))
+    fresh_source_fingerprint = fresh.get("source_fingerprint")
+    fresh_task_spec_fingerprint = fresh.get("task_spec_fingerprint")
     base = {
         "schema": PREFLIGHT_SCHEMA,
         "authoritative": False,
@@ -139,8 +142,9 @@ def preflight(
         "status": "IDLE",
         "reason_code": "no_dispatch",
         "task": None,
-        "canonical_through_comment_id": fresh.get("through_comment_id"),
-        "canonical_source_fingerprint": fresh.get("source_fingerprint"),
+        "canonical_through_comment_id": fresh_through,
+        "canonical_source_fingerprint": fresh_source_fingerprint,
+        "canonical_task_spec_fingerprint": fresh_task_spec_fingerprint,
         "claim_proposal": None,
     }
     if dispatch is None:
@@ -154,11 +158,54 @@ def preflight(
         result.update(status="STOP", reason_code="history_unsafe")
     else:
         capsule_source = capsule.get("source", {}) if capsule else {}
-        capsule_through = capsule_source.get("through_comment_id")
+        capsule_through = capsule_source.get(
+            "canonical_through_comment_id",
+            capsule_source.get("through_comment_id"),
+        )
         capsule_source_fingerprint = capsule_source.get("source_fingerprint")
-        fresh_through = fresh.get("through_comment_id")
-        fresh_source_fingerprint = fresh.get("source_fingerprint")
-        if capsule_through != fresh_through:
+        capsule_task_spec_fingerprint = capsule_source.get("task_spec_fingerprint")
+        capsule_event_count = (capsule.get("replay", {}) if capsule else {}).get(
+            "canonical_event_count"
+        )
+        fresh_event_count = fresh.get("canonical_event_count")
+        latest_owner_event = fresh.get("latest_owner_event")
+        if not isinstance(latest_owner_event, dict):
+            latest_owner_event = {}
+
+        task_spec_available = bool(
+            capsule_task_spec_fingerprint and fresh_task_spec_fingerprint
+        )
+        task_spec_matches = (
+            task_spec_available
+            and capsule_task_spec_fingerprint == fresh_task_spec_fingerprint
+        )
+        expected_claim_transition = (
+            task_spec_matches
+            and (capsule.get("task", {}) if capsule else {}).get("state") == "open"
+            and fresh.get("state") == "claimed"
+            and fresh.get("owner") == worker_id
+            and latest_owner_event.get("type") == "CLAIM"
+            and latest_owner_event.get("agent_id") == worker_id
+            and isinstance(capsule_event_count, int)
+            and not isinstance(capsule_event_count, bool)
+            and isinstance(fresh_event_count, int)
+            and not isinstance(fresh_event_count, bool)
+            and fresh_event_count == capsule_event_count + 1
+            and fresh_through != capsule_through
+        )
+
+        if task_spec_available and not task_spec_matches:
+            result.update(status="STALE_CONTEXT", reason_code="task_spec_changed")
+        elif fresh.get("state") == "completed":
+            result.update(status="STOP", reason_code="already_completed")
+        elif fresh.get("state") == "claimed" and fresh.get("owner") != worker_id:
+            result.update(status="WAIT", reason_code="owned_by_other_worker")
+        elif expected_claim_transition:
+            result.update(
+                status="READY",
+                reason_code="ownership_confirmed_after_claim",
+            )
+        elif capsule_through != fresh_through:
             result.update(status="STALE_CONTEXT", reason_code="canonical_history_changed")
         elif (
             not capsule_source_fingerprint
@@ -166,25 +213,25 @@ def preflight(
             or capsule_source_fingerprint != fresh_source_fingerprint
         ):
             result.update(status="STALE_CONTEXT", reason_code="canonical_source_changed")
-        elif fresh.get("state") == "completed":
-            result.update(status="STOP", reason_code="already_completed")
         elif fresh.get("state") == "open":
-            next_action = dispatch.get("next_action") or capsule.get("task", {}).get("objective") or "Execute selected task."
+            next_action = (
+                dispatch.get("next_action")
+                or capsule.get("task", {}).get("objective")
+                or "Execute selected task."
+            )
             result.update(
                 status="CLAIM_REQUIRED",
                 reason_code="task_unclaimed",
                 claim_proposal=_claim_proposal(task, worker_id, str(next_action)),
             )
         elif fresh.get("state") == "claimed":
-            owner = fresh.get("owner")
-            if owner == worker_id:
-                result.update(status="READY", reason_code="ownership_confirmed")
-            else:
-                result.update(status="WAIT", reason_code="owned_by_other_worker")
+            result.update(status="READY", reason_code="ownership_confirmed")
         else:
             result.update(status="STOP", reason_code="unsupported_canonical_state")
 
-    result["fingerprint"] = _fingerprint({k: v for k, v in result.items() if k != "fingerprint"})
+    result["fingerprint"] = _fingerprint(
+        {k: v for k, v in result.items() if k != "fingerprint"}
+    )
     return result
 
 

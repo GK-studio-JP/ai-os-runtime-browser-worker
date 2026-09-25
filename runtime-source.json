@@ -1,0 +1,50 @@
+{
+  "schema": "ai-os-runtime-source-lock:v1",
+  "canonical_repository": "GK-studio-JP/ai-os-runtime",
+  "canonical_commit": "d17f7024ebd2015a1595ed531406dd594d04741b",
+  "files": [
+    {
+      "path": "runtime.py",
+      "mode": "identical",
+      "canonical_blob": "a9ce9fc815c9a02de54019f65ffd007f954ec591",
+      "local_blob": "a9ce9fc815c9a02de54019f65ffd007f954ec591"
+    },
+    {
+      "path": "driver_runner.py",
+      "mode": "forked",
+      "canonical_blob": "b858cd1bc8eac178eb6e3ed51d0095896ecfdfaf",
+      "local_blob": "ab9f9041525adc38e9b6eefbfb6ede56f8997cea",
+      "rationale": "Browser Worker tolerates BrokenPipeError when a child exits before consuming stdin; return-code handling remains authoritative and child stderr remains suppressed. This exception is pinned to both exact blobs until upstreamed."
+    },
+    {
+      "path": "execution_budget.py",
+      "mode": "identical",
+      "canonical_blob": "a23b38550ca6fab4a57d248742bd25bc8a40dbd1",
+      "local_blob": "a23b38550ca6fab4a57d248742bd25bc8a40dbd1"
+    },
+    {
+      "path": "runtime_middleware.py",
+      "mode": "identical",
+      "canonical_blob": "e38964034a660cceecebf61f48155edd04849d9e",
+      "local_blob": "e38964034a660cceecebf61f48155edd04849d9e"
+    },
+    {
+      "path": "test_runtime.py",
+      "mode": "identical",
+      "canonical_blob": "395486ad6a636f41708c27aaa265dca45fde2cfa",
+      "local_blob": "395486ad6a636f41708c27aaa265dca45fde2cfa"
+    },
+    {
+      "path": "test_execution_budget.py",
+      "mode": "identical",
+      "canonical_blob": "34ebce6af73c9431dde836f2b6a2a339c68b9ea5",
+      "local_blob": "34ebce6af73c9431dde836f2b6a2a339c68b9ea5"
+    },
+    {
+      "path": "test_runtime_middleware.py",
+      "mode": "identical",
+      "canonical_blob": "18fe2b4fb41e716e9b4279cb14ea89b519534e54",
+      "local_blob": "18fe2b4fb41e716e9b4279cb14ea89b519534e54"
+    }
+  ]
+}
