@@ -25,9 +25,12 @@ def _task_requirement_text(task_payload: dict[str, Any]) -> str:
 
 
 def _requires_repository_change(task_payload: dict[str, Any]) -> bool:
-    objective = str(task_payload.get("objective") or "").lower()
+    requirement = _task_requirement_text(task_payload).lower()
     return bool(
-        re.search(r"\b(add|implement|fix|update|change|create|modify|repair)\b", objective)
+        re.search(
+            r"\b(add|implement|fix|fixed|update|change|create|modify|repair|close)\b",
+            requirement,
+        )
     )
 
 
