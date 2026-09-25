@@ -24,9 +24,9 @@ jobs:
     timeout-minutes: 15
     env:
       GITHUB_TOKEN: ${{ github.token }}
-      AI_OS_CONTEXT_SHA: bbfa99c928c2130470c851829cea8b5cccefb09f
-      AI_OS_SCHEDULER_SHA: 34c8f1481b989b4044d1bbd9f1c123c38f8d53ed
-      AI_OS_KERNEL_SHA: d4f33a54cdf1a733a98fc2dcb64520a8a5f0d6ac
+      AI_OS_CONTEXT_SHA: 87b7012fc98573c7223e85357369a5f552e242a4
+      AI_OS_SCHEDULER_SHA: 26126eb2bf392ff430b36ab8436747877c1a8c31
+      AI_OS_KERNEL_SHA: 3cb246a107e053c670ddb2188f0d6c23a90f0a0e
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -53,7 +53,17 @@ jobs:
       - name: Build projection
         run: aios-context snapshot --repo GK-studio-JP/ai-bulletin-board --state open --default-process PROC-BULLETIN --output-dir projection
       - name: Build dispatch
-        run: python scheduler/scheduler.py plan --view projection/scheduler-view.json --manifest projection/manifest.json --limit 1 --output dispatch/plan.json
+        run: python scheduler/scheduler.py plan --view projection/scheduler-view.json --manifest projection/manifest.json --limit 1 --process PROC-RUNTIME-BROWSER-WORKER --output dispatch/plan.json
+      - name: Validate dispatch scope
+        run: |
+          python - <<'PY'
+          import json
+          plan=json.load(open("dispatch/plan.json"))
+          assert plan.get("filters",{}).get("process")=="PROC-RUNTIME-BROWSER-WORKER"
+          for dispatch in plan.get("dispatches",[]):
+              assert dispatch.get("process")=="PROC-RUNTIME-BROWSER-WORKER", dispatch.get("process")
+          print("BROWSER_WORKER_DISPATCH_SCOPE_OK",plan.get("dispatch_count",0))
+          PY
       - name: Kernel validate
         run: python kernel/kernel.py validate-dispatch --registry kernel/registry/processes.json --plan dispatch/plan.json --output dispatch/kernel-validation.json
       - name: Build boot
