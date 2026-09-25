@@ -164,5 +164,46 @@ class RuntimeDriftGuardTests(unittest.TestCase):
             load_manifest(self.manifest_path)
 
 
+    def test_forked_canonical_drift_fails(self):
+        (self.canonical_root / "driver_runner.py").write_text(
+            "changed canonical driver runner\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(DriftError, "driver_runner.py: canonical drift"):
+            self._verify()
+
+    def test_manifest_rejects_unknown_mode(self):
+        value = self._manifest()
+        row = next(row for row in value["files"] if row["path"] == "runtime.py")
+        row["mode"] = "copied"
+        self._write_manifest(value)
+        with self.assertRaisesRegex(DriftError, "unsupported mode"):
+            load_manifest(self.manifest_path)
+
+    def test_missing_canonical_file_fails(self):
+        (self.canonical_root / "runtime.py").unlink()
+        with self.assertRaisesRegex(DriftError, "runtime.py: canonical file is missing"):
+            self._verify()
+
+    def test_missing_local_file_fails(self):
+        (self.local_root / "runtime.py").unlink()
+        with self.assertRaisesRegex(DriftError, "runtime.py: local file is missing"):
+            self._verify()
+
+    def test_manifest_rejects_unknown_root_field(self):
+        value = self._manifest()
+        value["unexpected"] = True
+        self._write_manifest(value)
+        with self.assertRaisesRegex(DriftError, "manifest root must contain exactly"):
+            load_manifest(self.manifest_path)
+
+    def test_symlinked_contract_file_fails(self):
+        local_path = self.local_root / "runtime.py"
+        local_path.unlink()
+        local_path.symlink_to(self.canonical_root / "runtime.py")
+        with self.assertRaisesRegex(DriftError, "runtime.py: local file must not be a symlink"):
+            self._verify()
+
+
 if __name__ == "__main__":
     unittest.main()
