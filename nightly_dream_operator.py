@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,8 @@ DENIED_CONTROL_TERMS = (
 )
 MAX_PROMPT_CHARS = 24000
 MAX_FEEDBACK_CHARS = 4000
+WORK_PAGE_OBSERVATION_ATTEMPTS = 4
+WORK_PAGE_OBSERVATION_SETTLE_SECONDS = 0.5
 
 
 def _allowed_github_url(url: str) -> str:
@@ -53,6 +56,32 @@ def _allowed_github_url(url: str) -> str:
     if not allowed:
         raise LauncherError(f"Nightly Dream navigation is outside the allowed repositories: {value}")
     return value
+
+
+def _is_observation_timeout(error: Exception) -> bool:
+    message = str(error or "").lower()
+    return (
+        "browser_observation_timeout" in message
+        or "observation timed out" in message
+    )
+
+
+def _work_get_page(relay: Relay) -> dict[str, Any]:
+    last_error: LauncherError | None = None
+    for attempt in range(WORK_PAGE_OBSERVATION_ATTEMPTS):
+        try:
+            return relay.command(
+                "getPage",
+                {"mode": "light", "maxElements": 80, "maxFrames": 1},
+            )
+        except LauncherError as exc:
+            if not _is_observation_timeout(exc):
+                raise
+            last_error = exc
+            if attempt + 1 < WORK_PAGE_OBSERVATION_ATTEMPTS:
+                time.sleep(WORK_PAGE_OBSERVATION_SETTLE_SECONDS)
+    assert last_error is not None
+    raise last_error
 
 
 def _element(page: dict[str, Any], element_id: str) -> dict[str, Any] | None:
@@ -214,7 +243,7 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
     feedback = "Browser Agent is ready. Begin by reading the current Nightly Dream runbook and contract."
     for step in range(1, args.max_steps + 1):
         relay.command("switchPage", {"index": 0})
-        page = relay.command("getPage", {})
+        page = _work_get_page(relay)
         observation = reduce_observation(page, max_text=5000, max_elements=80)
         command = ask_gemini(
             relay,
@@ -248,7 +277,7 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
             action, action_args = validate_operator_action(command, page)
             relay.command("switchPage", {"index": 0})
             if action in {"click", "fill"}:
-                fresh = relay.command("getPage", {})
+                fresh = _work_get_page(relay)
                 action_args = refresh_element_args(action, action_args, page, fresh)
             result = relay.command(action, action_args)
             feedback = (
