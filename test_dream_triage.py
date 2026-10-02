@@ -113,7 +113,7 @@ class DreamTriageTests(unittest.TestCase):
         relay = Relay()
         with patch("dream_triage_runner.ask_gemini", return_value=raw) as ask:
             result = run_triage(relay, capsule())
-        self.assertEqual(relay.last[0], "newPage")
+        self.assertEqual(relay.last, ("newPage", {}))
         self.assertEqual(ask.call_args.args[1], 3)
         self.assertEqual(result["decision"], "deep")
 
