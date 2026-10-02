@@ -386,6 +386,100 @@ class GeminiTransientErrorTests(unittest.TestCase):
             )
         )
 
+    def test_empty_focused_prompt_uses_typetext_after_fill_timeout(self):
+        prompt_text = "TASK full prompt sentinel with complete contents"
+
+        class FakeRelay:
+            def __init__(self):
+                self.actions = []
+                self.pages = [
+                    {
+                        "url": GEMINI,
+                        "generation": 2,
+                        "pageText": "Gemini shell only",
+                        "elements": [
+                            {
+                                "id": "g2-e1",
+                                "label": "Enter a prompt for Gemini",
+                                "text": "",
+                                "editable": True,
+                                "disabled": False,
+                                "states": {
+                                    "focused": True,
+                                    "readonly": False,
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "url": GEMINI,
+                        "generation": 3,
+                        "pageText": prompt_text,
+                        "elements": [
+                            {
+                                "id": "g3-e1",
+                                "label": "Enter a prompt for Gemini",
+                                "text": prompt_text,
+                            },
+                            {"id": "g3-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "url": GEMINI,
+                        "generation": 4,
+                        "pageText": (
+                            prompt_text
+                            + ' Gemini said {"kind":"wait","reason":"typetext-fallback-ok"}'
+                        ),
+                        "elements": [],
+                    },
+                ]
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "switchPage":
+                    return {
+                        "pageIndex": 1,
+                        "page": {
+                            "url": GEMINI,
+                            "generation": 1,
+                            "pageText": "",
+                            "elements": [
+                                {
+                                    "id": "g1-e1",
+                                    "label": "Enter a prompt for Gemini",
+                                }
+                            ],
+                        },
+                    }
+                if action == "fill":
+                    raise LauncherError(
+                        "Browser Agent fill failed: locator.fill: "
+                        "Timeout 10000ms exceeded"
+                    )
+                if action == "getPage":
+                    return self.pages.pop(0)
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 1, prompt_text)
+
+        self.assertEqual(
+            result,
+            {"kind": "wait", "reason": "typetext-fallback-ok"},
+        )
+        type_calls = [
+            args for action, args in relay.actions if action == "typeText"
+        ]
+        self.assertEqual(type_calls, [{"text": prompt_text}])
+        self.assertTrue(
+            any(
+                action == "click" and args.get("elementId") == "g3-e2"
+                for action, args in relay.actions
+            )
+        )
+
     def test_fill_timeout_fails_closed_when_full_prompt_not_observed(self):
         prompt_text = "TASK full prompt sentinel with complete contents"
 
