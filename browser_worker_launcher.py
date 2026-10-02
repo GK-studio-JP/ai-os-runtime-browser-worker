@@ -674,7 +674,10 @@ def _wait_for_gemini_retry_send(
 
 
 def _gemini_page(relay: Relay, gemini_index: int) -> dict[str, Any]:
-    switched = relay.command("switchPage", {"index": gemini_index})
+    switched = relay.command(
+        "switchPage",
+        {"index": gemini_index, "maxElements": 80, "maxFrames": 1},
+    )
     page = switched.get("page") if isinstance(switched, dict) else None
     if not isinstance(page, dict):
         raise LauncherError("Gemini switchPage returned no page observation")
@@ -684,7 +687,8 @@ def _gemini_page(relay: Relay, gemini_index: int) -> dict[str, Any]:
 def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, Any]:
     attempt_prompt = prompt_text
     _gemini_page(relay, gemini_index)
-    relay.command("goto", {"url": GEMINI})
+    relay.command("goto", {"url": GEMINI, "maxElements": 80, "maxFrames": 1})
+    time.sleep(2.0)
     for attempt in range(2):
         page = _gemini_page(relay, gemini_index)
         if dismiss := _find(page, text="Not now"):
