@@ -29,8 +29,6 @@ from ai_os_browser_worker.nightly_dream import (
 from ai_os_browser_worker.relay import Relay
 from browser_worker_launcher import ask_gemini
 from dream_triage_runner import _CurrentPageRelay, run_triage
-from ai_os_context.dream import build_dream_bundle, normalize_dream_report
-from ai_os_context.memory import MemoryUnavailable, search_global_memory
 from ai_os_context.replay import replay
 
 BOARD = "GK-studio-JP/ai-bulletin-board"
@@ -415,6 +413,8 @@ def _ensure_lease(
 
 
 def _memory_context(bundle: dict[str, Any], triage: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from ai_os_context.memory import search_global_memory
+
     queries: list[str] = []
     for row in bundle.get("tasks", []):
         if not isinstance(row, dict):
@@ -472,6 +472,12 @@ def _deferred_from_triage(bundle: dict[str, Any], triage: list[dict[str, Any]], 
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    try:
+        from ai_os_context.dream import build_dream_bundle, normalize_dream_report
+        from ai_os_context.memory import MemoryUnavailable
+    except ImportError as exc:
+        raise LauncherError("current ai-os-context Dream APIs are required") from exc
+
     automation_start = parse_iso(args.automation_start) if args.automation_start else _now()
     histories = (
         _load_histories(args.histories_file)
