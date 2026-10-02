@@ -343,6 +343,61 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
         self.assertEqual(result["status"],"finished")
         self.assertEqual(get_page_calls,0)
 
+    def test_about_blank_start_is_handed_to_gemini_without_runtime_goto(self):
+        calls=[]
+
+        class FakeRelay:
+            def __init__(self, base, key, session_id):
+                self.session=session_id
+            def ready(self):
+                return {"ready":True}
+            def command(self, action, args, timeout=None):
+                calls.append((action,dict(args),timeout))
+                if action=="start":
+                    return NightlyDreamOperatorLoopTests._page(
+                        generation=2,
+                        url="about:blank",
+                        title="",
+                        pageText="",
+                    )
+                if action=="goto":
+                    raise AssertionError("runtime must not choose the first navigation")
+                if action=="listPages":
+                    return {"pages":[{"index":0,"url":"about:blank","active":True}]}
+                if action=="newPage":
+                    return {"pageIndex":1,"url":args["url"]}
+                if action=="switchPage":
+                    return {
+                        "pageIndex":0,
+                        "page":NightlyDreamOperatorLoopTests._page(
+                            generation=3,
+                            url="about:blank",
+                            title="",
+                            pageText="",
+                        ),
+                    }
+                return {"ok":True}
+
+        result=self._run(
+            FakeRelay,
+            lambda *a, **k: {
+                "kind":"finish",
+                "summary":"Gemini received the blank work page and owns first navigation.",
+                "artifacts":[],
+                "evidence":[],
+                "reason":"done",
+            },
+            max_steps=1,
+        )
+        self.assertEqual(result["status"],"finished")
+        self.assertFalse(any(row[0]=="goto" for row in calls))
+        self.assertEqual(
+            operator._active_work_page_index({
+                "pages":[{"index":0,"url":"about:blank","active":True}]
+            }),
+            0,
+        )
+
     def test_requires_exactly_one_active_work_page(self):
         with self.assertRaisesRegex(LauncherError,"exactly one active work page"):
             operator._active_work_page_index({
