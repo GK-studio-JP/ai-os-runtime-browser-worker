@@ -91,8 +91,10 @@ class NightlyDreamOperatorPolicyTests(unittest.TestCase):
 
 
 class NightlyDreamOperatorLoopTests(unittest.TestCase):
-    def test_gemini_drives_browser_action_then_finish(self):
+    def test_gemini_drives_nonzero_work_page_then_finish(self):
         calls = []
+        work_page_index = 1
+        gemini_page_index = 2
 
         class FakeRelay:
             def __init__(self, base, key, session_id):
@@ -109,8 +111,27 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
                     return {"url": "about:blank"}
                 if action == "goto":
                     return {"url": args["url"]}
+                if action == "listPages":
+                    return {
+                        "pages": [
+                            {"index": 0, "url": "https://github.com/GK-studio-JP/ai-bulletin-board/issues/53", "active": False},
+                            {"index": work_page_index, "url": operator.START_URL, "active": True},
+                        ]
+                    }
                 if action == "newPage":
-                    return {"pageIndex": 1, "url": args["url"]}
+                    return {"pageIndex": gemini_page_index, "url": args["url"]}
+                if action == "switchPage":
+                    self.assert_work_switch(args)
+                    return {
+                        "pageIndex": work_page_index,
+                        "page": {
+                            "url": operator.START_URL,
+                            "title": "Dream Control",
+                            "generation": 4,
+                            "pageText": "Dream Control",
+                            "elements": [],
+                        },
+                    }
                 if action == "getPage":
                     return {
                         "url": operator.START_URL,
@@ -120,6 +141,13 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
                         "elements": [],
                     }
                 return {"ok": True}
+
+            @staticmethod
+            def assert_work_switch(args):
+                if args.get("index") != work_page_index:
+                    raise AssertionError(f"wrong work page index: {args}")
+                if args.get("observationTimeoutMs") != operator.WORK_PAGE_OBSERVATION_TIMEOUT_MS:
+                    raise AssertionError(f"missing work observation timeout: {args}")
 
         commands = iter(
             [
@@ -163,12 +191,20 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "finished")
         self.assertEqual(result["step"], 2)
+        self.assertIn(("listPages", {}, None), calls)
         self.assertTrue(
             any(
-                row[0] == "goto"
-                and row[1].get("url", "").startswith(
-                    "https://github.com/GK-studio-JP/ai-os-projects/"
-                )
+                row[0] == "switchPage"
+                and row[1].get("index") == work_page_index
+                and row[1].get("observationTimeoutMs")
+                == operator.WORK_PAGE_OBSERVATION_TIMEOUT_MS
+                for row in calls
+                if len(row) >= 2 and isinstance(row[1], dict)
+            )
+        )
+        self.assertFalse(
+            any(
+                row[0] == "switchPage" and row[1].get("index") == 0
                 for row in calls
                 if len(row) >= 2 and isinstance(row[1], dict)
             )
@@ -182,10 +218,19 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
                 if len(row) >= 2 and isinstance(row[1], dict)
             )
         )
+        self.assertTrue(
+            any(
+                row[0] == "goto"
+                and row[1].get("url", "").startswith(
+                    "https://github.com/GK-studio-JP/ai-os-projects/"
+                )
+                for row in calls
+                if len(row) >= 2 and isinstance(row[1], dict)
+            )
+        )
 
-
-    def test_retries_transient_work_page_observation_timeout(self):
-        get_page_calls = 0
+    def test_deferred_switch_observation_gets_explicit_long_retry(self):
+        get_page_args = []
 
         class FakeRelay:
             def __init__(self, base, key, session_id):
@@ -195,24 +240,35 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
                 return {"ready": True}
 
             def command(self, action, args, timeout=None):
-                nonlocal get_page_calls
                 if action == "start":
                     return {"url": "about:blank"}
                 if action == "goto":
                     return {"url": args["url"]}
+                if action == "listPages":
+                    return {
+                        "pages": [
+                            {"index": 3, "url": operator.START_URL, "active": True},
+                        ]
+                    }
                 if action == "newPage":
-                    return {"pageIndex": 1, "url": args["url"]}
+                    return {"pageIndex": 4, "url": args["url"]}
+                if action == "switchPage":
+                    return {
+                        "pageIndex": args["index"],
+                        "page": {
+                            "url": operator.START_URL,
+                            "observationStatus": "deferred",
+                            "generation": 5,
+                            "pageText": "",
+                            "elements": [],
+                        },
+                    }
                 if action == "getPage":
-                    get_page_calls += 1
-                    if get_page_calls == 1:
-                        raise LauncherError(
-                            "Browser Agent getPage failed: "
-                            "Browser light main-frame observation timed out after 10000ms"
-                        )
+                    get_page_args.append(dict(args))
                     return {
                         "url": operator.START_URL,
                         "title": "Dream Control",
-                        "generation": 5,
+                        "generation": 6,
                         "pageText": "Dream Control",
                         "elements": [],
                     }
@@ -224,7 +280,7 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
             args = Namespace(
                 prompt_file=str(prompt_file),
                 session_id="gcp-browser-1",
-                max_steps=2,
+                max_steps=1,
             )
             with patch.dict(
                 os.environ,
@@ -238,16 +294,35 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
                 "ask_gemini",
                 return_value={
                     "kind": "finish",
-                    "summary": "Recovered after transient observation timeout.",
+                    "summary": "Recovered after deferred work-page observation.",
                     "artifacts": [],
                     "evidence": [],
                     "reason": "done",
                 },
-            ), patch("browser_worker_launcher.time.sleep"):
+            ):
                 result = operator.run_operator(args)
 
         self.assertEqual(result["status"], "finished")
-        self.assertEqual(get_page_calls, 2)
+        self.assertTrue(get_page_args)
+        self.assertTrue(
+            all(
+                row.get("observationTimeoutMs")
+                == operator.WORK_PAGE_OBSERVATION_TIMEOUT_MS
+                for row in get_page_args
+            )
+        )
+
+    def test_requires_exactly_one_active_work_page(self):
+        with self.assertRaisesRegex(LauncherError, "exactly one active work page"):
+            operator._active_work_page_index(
+                {
+                    "pages": [
+                        {"index": 0, "url": operator.START_URL, "active": True},
+                        {"index": 1, "url": operator.START_URL, "active": True},
+                    ]
+                }
+            )
+
 
 
 if __name__ == "__main__":
