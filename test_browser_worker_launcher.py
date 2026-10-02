@@ -173,6 +173,10 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(goto_calls[0]["maxElements"], 80)
         self.assertEqual(goto_calls[0]["maxFrames"], 1)
         self.assertEqual(goto_calls[0]["mode"], "light")
+        switch_calls = [args for action, args in relay.actions if action == "switchPage"]
+        self.assertEqual(len(switch_calls), 1)
+        self.assertEqual(switch_calls[0]["maxElements"], 80)
+        self.assertEqual(switch_calls[0]["maxFrames"], 1)
 
     def test_streaming_partial_response_can_complete_before_malformed_retry(self):
         class FakeRelay:
