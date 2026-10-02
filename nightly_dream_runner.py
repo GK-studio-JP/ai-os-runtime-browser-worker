@@ -142,11 +142,21 @@ def _wait_replay(
     )
 
 
-def _find(page: dict[str, Any], *, role: str | None = None, text: str | None = None, label: str | None = None) -> dict[str, Any] | None:
+def _find(
+    page: dict[str, Any],
+    *,
+    role: str | None = None,
+    text: str | None = None,
+    text_prefix: str | None = None,
+    label: str | None = None,
+) -> dict[str, Any] | None:
     for element in page.get("elements") or []:
         if role is not None and element.get("role") != role:
             continue
-        if text is not None and str(element.get("text") or "").strip() != text:
+        element_text = str(element.get("text") or "").strip()
+        if text is not None and element_text != text:
+            continue
+        if text_prefix is not None and not element_text.startswith(text_prefix):
             continue
         if label is not None and str(element.get("label") or "").strip() != label:
             continue
@@ -211,6 +221,8 @@ def _create_run_issue(
         _find(page, role="button", text="Submit new issue")
         or _find(page, role="button", text="Create issue")
         or _find(page, role="button", text="Submit")
+        or _find(page, role="button", text_prefix="Create(")
+        or _find(page, role="button", text_prefix="Create (")
     )
     if not button:
         raise LauncherError("new Dream Run submit button unavailable")
