@@ -144,13 +144,16 @@ class Relay:
                         f"browser_relay_commands?session_id=eq.{self.session}&command_id=eq.{command_id}&select=status,result,error&limit=1",
                     ) or []
                 except LauncherError as exc:
-                    if (
-                        attempt < max_attempts
-                        and _transient_relay_error(str(exc))
-                    ):
+                    if _transient_relay_error(str(exc)):
+                        # The command has already been submitted. A transient
+                        # read failure must not repost the action under a new
+                        # command_id: the original command may already be
+                        # running or completed. Keep polling the same canonical
+                        # row until the overall deadline, then do the final
+                        # reconciliation read below.
                         last_transient_error = str(exc)
-                        retry = True
-                        break
+                        time.sleep(0.5)
+                        continue
                     raise
 
                 row = rows[0] if rows else {}
