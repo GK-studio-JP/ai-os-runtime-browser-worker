@@ -55,6 +55,18 @@ def _allowed_github_url(url: str) -> str:
     return value
 
 
+def _page_observation(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    if not str(value.get("url") or ""):
+        return None
+    if value.get("generation") is None:
+        return None
+    if not isinstance(value.get("elements"), list):
+        return None
+    return value
+
+
 def _element(page: dict[str, Any], element_id: str) -> dict[str, Any] | None:
     return next(
         (row for row in page.get("elements") or [] if str(row.get("id") or "") == element_id),
@@ -207,14 +219,19 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
     relay = Relay(base, key, args.session_id)
     relay.ready()
     relay.command("start", {})
-    relay.command("goto", {"url": START_URL})
+    initial_page = relay.command("goto", {"url": START_URL})
+    cached_page = _page_observation(initial_page)
     opened = relay.command("newPage", {"url": GEMINI, "pageCreateTimeoutMs": 60000})
     gemini_index = int(opened.get("pageIndex", 1)) if isinstance(opened, dict) else 1
 
     feedback = "Browser Agent is ready. Begin by reading the current Nightly Dream runbook and contract."
     for step in range(1, args.max_steps + 1):
         relay.command("switchPage", {"index": 0})
-        page = _gemini_get_page(relay)
+        if cached_page is not None:
+            page = cached_page
+            cached_page = None
+        else:
+            page = _gemini_get_page(relay)
         observation = reduce_observation(page, max_text=5000, max_elements=80)
         command = ask_gemini(
             relay,
@@ -251,6 +268,7 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
                 fresh = _gemini_get_page(relay)
                 action_args = refresh_element_args(action, action_args, page, fresh)
             result = relay.command(action, action_args)
+            cached_page = _page_observation(result)
             feedback = (
                 "Executed Browser Agent action successfully: "
                 + json.dumps(
