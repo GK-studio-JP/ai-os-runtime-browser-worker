@@ -637,6 +637,32 @@ def _has_new_gemini_response(baseline_text: str, current_text: str) -> bool:
     return current_text.count("Gemini said") > baseline_text.count("Gemini said")
 
 
+def _is_browser_observation_timeout(error: Exception) -> bool:
+    message = str(error or "").lower()
+    return (
+        "browser_observation_timeout" in message
+        or "observation timed out" in message
+    )
+
+
+def _gemini_get_page(relay: Relay, attempts: int = 3) -> dict[str, Any]:
+    last_error: LauncherError | None = None
+    for attempt in range(attempts):
+        try:
+            return relay.command(
+                "getPage",
+                {"mode": "light", "maxElements": 80, "maxFrames": 1},
+            )
+        except LauncherError as exc:
+            if not _is_browser_observation_timeout(exc):
+                raise
+            last_error = exc
+            if attempt + 1 < attempts:
+                time.sleep(GEMINI_RETRY_SETTLE_POLL_SECONDS)
+    assert last_error is not None
+    raise last_error
+
+
 def _settle_gemini_before_retry(
     relay: Relay,
     page: dict[str, Any],
@@ -649,7 +675,7 @@ def _settle_gemini_before_retry(
     end = time.monotonic() + GEMINI_RETRY_SETTLE_TIMEOUT_SECONDS
     while time.monotonic() < end:
         time.sleep(GEMINI_RETRY_SETTLE_POLL_SECONDS)
-        page = relay.command("getPage", {})
+        page = _gemini_get_page(relay)
         if not _find(page, label="Stop response"):
             return page
     raise LauncherError("Gemini previous response did not stop before retry")
@@ -666,7 +692,7 @@ def _wait_for_gemini_retry_send(
     end = time.monotonic() + GEMINI_RETRY_SETTLE_TIMEOUT_SECONDS
     while time.monotonic() < end:
         time.sleep(GEMINI_RETRY_SETTLE_POLL_SECONDS)
-        page = relay.command("getPage", {})
+        page = _gemini_get_page(relay)
         send = _find(page, label="Send message")
         if send:
             return page, send
@@ -679,17 +705,17 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
     relay.command("goto", {"url": GEMINI})
     for attempt in range(2):
         relay.command("switchPage", {"index": gemini_index})
-        page = relay.command("getPage", {})
+        page = _gemini_get_page(relay)
         if dismiss := _find(page, text="Not now"):
             relay.command("click", {"elementId": dismiss["id"]})
-            page = relay.command("getPage", {})
+            page = _gemini_get_page(relay)
         if attempt > 0:
             page = _settle_gemini_before_retry(relay, page)
         box = _find(page, label="Enter a prompt for Gemini")
         if not box:
             raise LauncherError("Gemini prompt box unavailable")
         relay.command("fill", {"elementId": box["id"], "text": attempt_prompt})
-        page = relay.command("getPage", {})
+        page = _gemini_get_page(relay)
         baseline_text = str(page.get("pageText") or "")
         baseline = len(_commands(baseline_text))
         send = _find(page, label="Send message")
@@ -705,7 +731,7 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
         malformed_stable_polls = 0
         while time.monotonic() < end:
             time.sleep(1.5)
-            page = relay.command("getPage", {})
+            page = _gemini_get_page(relay)
             text = str(page.get("pageText") or "")
             stopped = not _find(page, label="Stop response")
             commands = _commands(text)
@@ -912,7 +938,7 @@ def append_issue_comment(
 ) -> None:
     relay.command("switchPage", {"index": page_index})
     relay.command("goto", {"url": issue_url})
-    page = relay.command("getPage", {})
+    page = _gemini_get_page(relay)
     box = next(
         (
             element
@@ -925,7 +951,7 @@ def append_issue_comment(
     if not box:
         raise LauncherError("canonical Issue comment box unavailable")
     relay.command("fill", {"elementId": box["id"], "text": body})
-    page = relay.command("getPage", {})
+    page = _gemini_get_page(relay)
     button = next(
         (
             element
@@ -1071,7 +1097,7 @@ def run_worker(
     relay.command("start", {})
     relay.command("goto", {"url": issue_url})
     ledger: list[dict[str, Any]] = []
-    initial_page = relay.command("getPage", {})
+    initial_page = _gemini_get_page(relay)
     _record_page_evidence(ledger, initial_page)
 
     claim_body = protocol_event_body(
@@ -1118,7 +1144,7 @@ def run_worker(
             claimed = True
 
             relay.command("switchPage", {"index": 0})
-            page = relay.command("getPage", {})
+            page = _gemini_get_page(relay)
             if not source_mutation_performed:
                 page = _enrich_authoritative_editor_source(
                     page,
@@ -1233,7 +1259,7 @@ def run_worker(
             relay.command("switchPage", {"index": 0})
             guard_page = page
             if action in {"click", "fill"}:
-                fresh_page = relay.command("getPage", {})
+                fresh_page = _gemini_get_page(relay)
                 if not source_mutation_performed:
                     fresh_page = _enrich_authoritative_editor_source(
                         fresh_page,
@@ -1302,7 +1328,7 @@ def run_worker(
                 and _source_edit_url(str(guard_page.get("url") or ""), repository)
             ):
                 source_mutation_performed = True
-            page = relay.command("getPage", {})
+            page = _gemini_get_page(relay)
             _record_page_evidence(ledger, page)
             decision = loop_guard.observe_tool_call(
                 agent,
@@ -1406,3 +1432,5 @@ if __name__ == "__main__":
     except LauncherError as exc:
         print(f"LAUNCHER_ERROR: {exc}", file=sys.stderr)
         raise SystemExit(1)
+
+[executed on device: instance-20260926-031048 (49e8ceb9-e3f9-45cd-bc48-7cbc2eb83883)]
