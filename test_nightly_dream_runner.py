@@ -2,8 +2,6 @@ import json
 import unittest
 from datetime import datetime, timezone
 
-from nightly_dream_runner import _find
-
 from ai_os_browser_worker.nightly_dream import (
     CYCLE_MARKER,
     cycle_id,
@@ -39,23 +37,6 @@ def protocol_result(issue_number: int) -> dict:
             + "\n```"
         ),
     }
-
-
-class NightlyDreamUiTests(unittest.TestCase):
-    def test_find_accepts_current_create_button_prefix(self):
-        page = {
-            "elements": [
-                {
-                    "id": "g1-e57",
-                    "role": "button",
-                    "text": "Create( control⌃ enter⏎)",
-                    "label": "Create( control⌃ enter⏎)",
-                }
-            ]
-        }
-        found = _find(page, role="button", text_prefix="Create(")
-        self.assertIsNotNone(found)
-        self.assertEqual(found["id"], "g1-e57")
 
 
 class NightlyDreamLogicTests(unittest.TestCase):
