@@ -642,7 +642,10 @@ def _new_gemini_response_fragment(
 ) -> str | None:
     if current_text.count("Gemini said") <= baseline_text.count("Gemini said"):
         return None
-    return current_text.rsplit("Gemini said", 1)[-1]
+    fragment = current_text.rsplit("Gemini said", 1)[-1]
+    if "You said" in fragment:
+        fragment = fragment.split("You said", 1)[0]
+    return fragment
 
 
 def _has_new_gemini_response(baseline_text: str, current_text: str) -> bool:
