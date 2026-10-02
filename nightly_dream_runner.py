@@ -25,8 +25,6 @@ from browser_worker_launcher import (
     protocol_event_body,
 )
 from dream_triage_runner import run_triage
-from ai_os_context.dream import build_dream_bundle, normalize_dream_report
-from ai_os_context.memory import MemoryUnavailable, search_global_memory
 from ai_os_context.replay import replay as canonical_replay
 
 CONTROL_ISSUE = 52
@@ -334,6 +332,10 @@ def _run_body(meta: dict[str, Any]) -> str:
 
 
 def _memory_context(tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    try:
+        from ai_os_context.memory import MemoryUnavailable, search_global_memory
+    except ImportError as exc:
+        raise LauncherError("current ai-os-context Memory API is required") from exc
     out: dict[str, Any] = {}
     for row in tasks:
         capsule = row.get("triage_capsule") or {}
@@ -378,7 +380,7 @@ def _deep_prompt(
     )
 
 
-def _empty_report(bundle: dict[str, Any]) -> dict[str, Any]:
+def _empty_report(bundle: dict[str, Any], normalize_dream_report) -> dict[str, Any]:
     return normalize_dream_report(
         bundle,
         {
@@ -633,6 +635,10 @@ def _write_status(path: str | None, value: dict[str, Any]) -> None:
 
 
 def run_cycle(args: argparse.Namespace) -> int:
+    try:
+        from ai_os_context.dream import build_dream_bundle, normalize_dream_report
+    except ImportError as exc:
+        raise LauncherError("current ai-os-context Dream API is required") from exc
     now = _now_jst()
     agent_id = f"gemini:nightly-dream:{now.strftime('%Y%m%dT%H%M%S%z')}:{uuid.uuid4().hex[:8]}"
     relay = Relay(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SECRET_KEY"], args.session_id)
@@ -795,7 +801,7 @@ def run_cycle(args: argparse.Namespace) -> int:
                 {key: value for key, value in raw_report.items() if key != "kind"},
             )
         else:
-            report = _empty_report(bundle)
+            report = _empty_report(bundle, normalize_dream_report)
 
         documents = _memory_documents_projection()
         publish_plans: list[dict[str, Any]] = []
