@@ -156,6 +156,48 @@ class NightlyDreamLogicTests(unittest.TestCase):
         )
         self.assertEqual(found[0]["number"], 59)
 
+    def test_legacy_unmarked_run_and_cycle_preserve_watermark(self):
+        issue = {
+            "number": 53,
+            "state": "closed",
+            "created_at": "2026-10-02T01:00:00Z",
+            "body": (
+                "```json\n"
+                + json.dumps({
+                    "schema": "aios-dream-run:v1",
+                    "cycle_id": "sha256:" + "c" * 64,
+                    "contract_version": 1,
+                    "window_start": "2026-10-01T15:00:00Z",
+                    "window_end": "2026-10-02T02:40:20Z",
+                    "settle_delay_seconds": 3600,
+                    "previous_success_issue": 0,
+                    "previous_success_window_end": None,
+                })
+                + "\n```"
+            ),
+        }
+        state = {
+            "schema": "aios-dream-cycle:v1",
+            "cycle_id": "sha256:" + "c" * 64,
+            "status": "completed",
+            "window_start": "2026-10-01T15:00:00Z",
+            "window_end": "2026-10-02T02:40:20Z",
+            "bundle_fingerprint": "sha256:" + "d" * 64,
+            "counts": {},
+            "deferred": [],
+            "memory_prs": [],
+            "project_prs": [],
+        }
+        comments = [
+            {"body": "```json\n" + json.dumps(state) + "\n```"},
+            protocol_result(53),
+        ]
+        found = latest_success([(issue, comments)])
+        self.assertIsNotNone(found)
+        self.assertEqual(found[0]["number"], 53)
+        self.assertEqual(found[1]["contract_version"], 1)
+
+
     def test_auto_source_parser_does_not_require_histories_file(self):
         args = runner.parser().parse_args(["--auto-source"])
         self.assertTrue(args.auto_source)
