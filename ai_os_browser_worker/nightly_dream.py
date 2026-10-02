@@ -39,7 +39,7 @@ def _json_after_marker(body: str, marker: str) -> dict[str, Any] | None:
     if marker not in body:
         return None
     tail = body.split(marker, 1)[1]
-    match = re.search(r"\`\`\`json\s*(\{.*?\})\s*\`\`\`", tail, re.S | re.I)
+    match = re.search(r"```json\s*(\{.*?\})\s*```", tail, re.S | re.I)
     if not match:
         return None
     try:
@@ -72,7 +72,7 @@ def has_result(comments: Iterable[dict[str, Any]], issue_number: int) -> bool:
         if marker not in body:
             continue
         tail = body.split(marker, 1)[1]
-        match = re.search(r"\`\`\`json\s*(\{.*?\})\s*\`\`\`", tail, re.S | re.I)
+        match = re.search(r"```json\s*(\{.*?\})\s*```", tail, re.S | re.I)
         if not match:
             continue
         try:
@@ -198,13 +198,13 @@ def run_issue_body(
         "previous_success_window_end": iso(window_start) if previous_success_issue else None,
     }
     return (
-        "<!-- ai-os-task:v1 -->\n\`\`\`json\n"
+        "<!-- ai-os-task:v1 -->\n```json\n"
         + json.dumps(task, ensure_ascii=False, indent=2)
-        + "\n\`\`\`\n\n"
+        + "\n```\n\n"
         + RUN_MARKER
-        + "\n\`\`\`json\n"
+        + "\n```json\n"
         + json.dumps(meta, ensure_ascii=False, indent=2)
-        + "\n\`\`\`\n"
+        + "\n```\n"
     )
 
 
@@ -231,7 +231,7 @@ def cycle_state_body(
         "memory_prs": memory_prs or [],
         "project_prs": project_prs or [],
     }
-    return CYCLE_MARKER + "\n\`\`\`json\n" + json.dumps(value, ensure_ascii=False, indent=2) + "\n\`\`\`"
+    return CYCLE_MARKER + "\n```json\n" + json.dumps(value, ensure_ascii=False, indent=2) + "\n```"
 
 
 def deep_prompt(
