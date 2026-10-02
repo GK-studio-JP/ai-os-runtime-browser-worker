@@ -20,6 +20,7 @@ from ai_os_browser_worker.navigation_policy import (
 )
 from browser_worker_launcher import (
     GEMINI_MALFORMED_STABLE_POLLS,
+    GEMINI_VALID_STABLE_POLLS,
     GEMINI_RESPONSE_TIMEOUT_SECONDS,
     LauncherError,
     _has_new_gemini_response,
@@ -223,6 +224,91 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(
             sum(1 for action, _ in relay.actions if action == "goto"),
             1,
+        )
+
+    def test_stable_valid_response_finishes_when_stop_control_sticks(self):
+        class FakeRelay:
+            def __init__(self):
+                self.actions = []
+                self.get_page_calls = 0
+                stable = {
+                    "pageText": 'TASK Gemini said {"kind":"wait","reason":"stable-json"}',
+                    "elements": [{"id": "g3-stop", "label": "Stop response"}],
+                }
+                self.pages = [
+                    {
+                        "pageText": "",
+                        "elements": [{"id": "g1-e1", "label": "Enter a prompt for Gemini"}],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g2-e2", "label": "Send message"},
+                        ],
+                    },
+                ] + [dict(stable) for _ in range(GEMINI_VALID_STABLE_POLLS)]
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "getPage":
+                    self.get_page_calls += 1
+                    return self.pages.pop(0)
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 1, "TASK")
+
+        self.assertEqual(result, {"kind": "wait", "reason": "stable-json"})
+        self.assertEqual(relay.get_page_calls, 2 + GEMINI_VALID_STABLE_POLLS)
+
+    def test_stuck_stop_requires_consecutive_identical_valid_command(self):
+        class FakeRelay:
+            def __init__(self):
+                self.get_page_calls = 0
+                self.pages = [
+                    {
+                        "pageText": "",
+                        "elements": [{"id": "g1-e1", "label": "Enter a prompt for Gemini"}],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g2-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "pageText": 'TASK Gemini said {"kind":"wait","reason":"draft-a"}',
+                        "elements": [{"id": "g3-stop", "label": "Stop response"}],
+                    },
+                    {
+                        "pageText": 'TASK Gemini said {"kind":"wait","reason":"draft-b"}',
+                        "elements": [{"id": "g4-stop", "label": "Stop response"}],
+                    },
+                ] + [
+                    {
+                        "pageText": 'TASK Gemini said {"kind":"wait","reason":"draft-b"}',
+                        "elements": [{"id": "g5-stop", "label": "Stop response"}],
+                    }
+                    for _ in range(GEMINI_VALID_STABLE_POLLS - 1)
+                ]
+
+            def command(self, action, args):
+                if action == "getPage":
+                    self.get_page_calls += 1
+                    return self.pages.pop(0)
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 1, "TASK")
+
+        self.assertEqual(result, {"kind": "wait", "reason": "draft-b"})
+        self.assertEqual(
+            relay.get_page_calls,
+            3 + GEMINI_VALID_STABLE_POLLS,
         )
 
     def test_streaming_partial_response_can_complete_before_malformed_retry(self):
