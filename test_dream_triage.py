@@ -133,5 +133,3 @@ class DreamTriageTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-[executed on device: instance-20260926-031048 (49e8ceb9-e3f9-45cd-bc48-7cbc2eb83883)]
