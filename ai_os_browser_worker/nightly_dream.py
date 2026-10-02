@@ -49,19 +49,45 @@ def _json_after_marker(body: str, marker: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _fenced_json_objects(body: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for match in re.finditer(r"```json\\s*(\\{.*?\\})\\s*```", body, re.S | re.I):
+        try:
+            value = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            out.append(value)
+    return out
+
+
 def run_metadata(issue: dict[str, Any]) -> dict[str, Any] | None:
-    value = _json_after_marker(str(issue.get("body") or ""), RUN_MARKER)
-    if value is None or value.get("schema") != "aios-dream-run:v1":
-        return None
-    return value
+    body = str(issue.get("body") or "")
+    value = _json_after_marker(body, RUN_MARKER)
+    if value is not None and value.get("schema") == "aios-dream-run:v1":
+        return value
+    # Production Run #53 predates the explicit marker. Preserve its successful
+    # watermark by accepting only an exact fenced Dream-run schema as fallback.
+    for candidate in _fenced_json_objects(body):
+        if candidate.get("schema") == "aios-dream-run:v1":
+            return candidate
+    return None
 
 
 def cycle_states(comments: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for comment in comments:
-        value = _json_after_marker(str(comment.get("body") or ""), CYCLE_MARKER)
+        body = str(comment.get("body") or "")
+        value = _json_after_marker(body, CYCLE_MARKER)
         if value is not None and value.get("schema") == "aios-dream-cycle:v1":
             out.append(value)
+            continue
+        # The first production cycle state was emitted before CYCLE_MARKER was
+        # introduced. Accept only the exact fenced cycle schema as compatibility.
+        for candidate in _fenced_json_objects(body):
+            if candidate.get("schema") == "aios-dream-cycle:v1":
+                out.append(candidate)
+                break
     return out
 
 
