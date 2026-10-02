@@ -241,6 +241,46 @@ def _gemini_deep(relay: Relay, prompt_text: str) -> dict[str, Any]:
     return ask_gemini(_CurrentPageRelay(relay, current_url=current_url), 0, prompt_text)
 
 
+def _ensure_lease(
+    relay: Relay,
+    *,
+    issue_number: int,
+    issue_url: str,
+    agent_id: str,
+    phase: str,
+) -> None:
+    state = _wait_replay(
+        issue_number,
+        lambda value: value.state in {"claimed", "open", "completed", "history_unsafe"},
+        timeout=10,
+    )
+    if not state.history_safe:
+        raise LauncherError(f"canonical history became unsafe before {phase}")
+    if state.state != "claimed" or state.owner != agent_id:
+        raise LauncherError(f"canonical lease ownership was lost before {phase}")
+    if state.lease_status != "expiring":
+        return
+    _append_comment(
+        relay,
+        issue_url,
+        _protocol_body(
+            "HEARTBEAT",
+            agent_id=agent_id,
+            task=f"#{issue_number}",
+            summary=f"Renewing Nightly Dream lease before {phase}.",
+            next_action=f"Continue the same Nightly Dream cycle through {phase}.",
+        ),
+    )
+    _wait_replay(
+        issue_number,
+        lambda value: (
+            value.state == "claimed"
+            and value.owner == agent_id
+            and value.lease_status != "expired"
+        ),
+    )
+
+
 def _memory_context(bundle: dict[str, Any], triage: list[dict[str, Any]]) -> list[dict[str, Any]]:
     queries: list[str] = []
     for row in bundle.get("tasks", []):
@@ -389,6 +429,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
         triage: list[dict[str, Any]] = []
         for row in bundle.get("tasks", []):
+            _ensure_lease(
+                relay,
+                issue_number=CONTROL_ISSUE,
+                issue_url=CONTROL_URL,
+                agent_id=agent,
+                phase=f"triage {row.get('task')}",
+            )
+            _ensure_lease(
+                relay,
+                issue_number=run_no,
+                issue_url=run_url,
+                agent_id=agent,
+                phase=f"triage {row.get('task')}",
+            )
             capsule = row.get("triage_capsule")
             deterministic = deterministic_triage(capsule)
             if deterministic is not None:
@@ -412,6 +466,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             memory = []
 
         if deep_count:
+            _ensure_lease(
+                relay,
+                issue_number=CONTROL_ISSUE,
+                issue_url=CONTROL_URL,
+                agent_id=agent,
+                phase="deep synthesis",
+            )
+            _ensure_lease(
+                relay,
+                issue_number=run_no,
+                issue_url=run_url,
+                agent_id=agent,
+                phase="deep synthesis",
+            )
             raw_report = _gemini_deep(relay, deep_prompt(bundle, triage, existing_memory=memory))
             report = normalize_dream_report(bundle, raw_report)
         else:
@@ -458,6 +526,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         if isinstance(item, dict)
                     ],
                 })
+
+        _ensure_lease(
+            relay,
+            issue_number=CONTROL_ISSUE,
+            issue_url=CONTROL_URL,
+            agent_id=agent,
+            phase="cycle persistence",
+        )
+        _ensure_lease(
+            relay,
+            issue_number=run_no,
+            issue_url=run_url,
+            agent_id=agent,
+            phase="cycle persistence",
+        )
 
         state_body = cycle_state_body(
             cycle=cycle,
@@ -572,7 +655,7 @@ def main() -> int:
     args = parser().parse_args()
     try:
         result = run(args)
-    except LauncherError as exc:
+    except Exception as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
