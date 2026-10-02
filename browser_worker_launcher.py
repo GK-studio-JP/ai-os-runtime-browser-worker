@@ -54,6 +54,8 @@ GEMINI_TRANSIENT_ERRORS = (
     "Sorry, something went wrong. Please try your request again.",
 )
 GEMINI_RESPONSE_TIMEOUT_SECONDS = 90
+GEMINI_OBSERVATION_TIMEOUT_MS = 30000
+GEMINI_MAIN_FRAME_OBSERVATION_TIMEOUT_MS = 20000
 GEMINI_RETRY_SETTLE_TIMEOUT_SECONDS = 10
 GEMINI_RETRY_SETTLE_POLL_SECONDS = 0.5
 GEMINI_MALFORMED_STABLE_POLLS = 3
@@ -646,14 +648,38 @@ def _is_browser_observation_timeout(error: Exception) -> bool:
     )
 
 
+def gemini_observation_args() -> dict[str, Any]:
+    return {
+        "mode": "light",
+        "maxElements": 80,
+        "maxFrames": 1,
+        "observationTimeoutMs": GEMINI_OBSERVATION_TIMEOUT_MS,
+        "mainFrameObservationTimeoutMs": GEMINI_MAIN_FRAME_OBSERVATION_TIMEOUT_MS,
+    }
+
+
+def _usable_gemini_observation(value: Any) -> dict[str, Any] | None:
+    page = value.get("page") if isinstance(value, dict) else None
+    if not isinstance(page, dict):
+        page = value if isinstance(value, dict) else None
+    if not isinstance(page, dict):
+        return None
+    if not str(page.get("url") or "").startswith(GEMINI):
+        return None
+    if page.get("observationStatus") == "deferred":
+        return None
+    if not isinstance(page.get("pageText"), str):
+        return None
+    if not isinstance(page.get("elements"), list):
+        return None
+    return page
+
+
 def _gemini_get_page(relay: Relay, attempts: int = 3) -> dict[str, Any]:
     last_error: LauncherError | None = None
     for attempt in range(attempts):
         try:
-            return relay.command(
-                "getPage",
-                {"mode": "light", "maxElements": 80, "maxFrames": 1},
-            )
+            return relay.command("getPage", gemini_observation_args())
         except LauncherError as exc:
             if not _is_browser_observation_timeout(exc):
                 raise
@@ -704,7 +730,7 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
     attempt_prompt = prompt_text
     switched = relay.command(
         "switchPage",
-        {"index": gemini_index, "mode": "light", "maxElements": 80, "maxFrames": 1},
+        {"index": gemini_index, **gemini_observation_args()},
     )
     switched_page = switched.get("page") if isinstance(switched, dict) else None
     switched_url = (
@@ -714,13 +740,19 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
         if isinstance(switched, dict)
         else ""
     )
+    initial_page = _usable_gemini_observation(switched)
     if not switched_url.startswith(GEMINI):
-        relay.command(
+        navigated = relay.command(
             "goto",
-            {"url": GEMINI, "mode": "light", "maxElements": 80, "maxFrames": 1},
+            {"url": GEMINI, **gemini_observation_args()},
         )
+        initial_page = _usable_gemini_observation(navigated)
     for attempt in range(2):
-        page = _gemini_get_page(relay)
+        if initial_page is not None:
+            page = initial_page
+            initial_page = None
+        else:
+            page = _gemini_get_page(relay)
         if dismiss := _find(page, text="Not now"):
             relay.command("click", {"elementId": dismiss["id"]})
             page = _gemini_get_page(relay)
