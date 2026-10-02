@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from ai_os_browser_worker.dream_triage import deterministic_triage
 from ai_os_browser_worker.navigation_policy import LauncherError
+from ai_os_browser_worker.nightly_dream_probe import trigger_probe
 from ai_os_browser_worker.nightly_dream import (
     cycle_id,
     cycle_state_body,
@@ -725,13 +726,15 @@ def parser() -> argparse.ArgumentParser:
     root.add_argument("--snapshot-output")
     root.add_argument("--session-id", default="gcp-browser-1")
     root.add_argument("--automation-start")
+    root.add_argument("--trigger-probe", action="store_true")
+    root.add_argument("--probe-id")
     return root
 
 
 def main() -> int:
     args = parser().parse_args()
     try:
-        result = run(args)
+        result = trigger_probe(args) if args.trigger_probe else run(args)
     except Exception as exc:
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
