@@ -208,7 +208,7 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
     relay.ready()
     relay.command("start", {})
     relay.command("goto", {"url": START_URL})
-    opened = relay.command("newPage", {"url": GEMINI})
+    opened = relay.command("newPage", {"url": GEMINI, "pageCreateTimeoutMs": 60000})
     gemini_index = int(opened.get("pageIndex", 1)) if isinstance(opened, dict) else 1
 
     feedback = "Browser Agent is ready. Begin by reading the current Nightly Dream runbook and contract."
