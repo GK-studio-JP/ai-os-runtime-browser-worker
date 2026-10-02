@@ -1,5 +1,8 @@
 import json
 import unittest
+from unittest.mock import patch
+
+import nightly_dream_runner as runner
 from datetime import datetime, timezone
 
 from ai_os_browser_worker.nightly_dream import (
@@ -152,6 +155,34 @@ class NightlyDreamLogicTests(unittest.TestCase):
             ]
         )
         self.assertEqual(found[0]["number"], 59)
+
+    def test_auto_source_parser_does_not_require_histories_file(self):
+        args = runner.parser().parse_args(["--auto-source"])
+        self.assertTrue(args.auto_source)
+        self.assertIsNone(args.histories_file)
+
+    def test_validated_history_rejects_incomplete_comment_page(self):
+        issue = {
+            "number": 52,
+            "created_at": "2026-10-02T00:00:00Z",
+            "updated_at": "2026-10-02T01:00:00Z",
+            "comments": 2,
+        }
+        one_comment = {
+            "id": 1,
+            "created_at": "2026-10-02T00:30:00Z",
+            "updated_at": "2026-10-02T00:30:00Z",
+            "author_association": "OWNER",
+            "body": "x",
+            "user": {"login": "GK-studio-JP"},
+        }
+        with patch.object(runner, "_live_comments", return_value=[one_comment]):
+            with self.assertRaisesRegex(
+                runner.LauncherError,
+                "declares 2 comments but 1 were fetched",
+            ):
+                runner._validated_history(issue)
+
 
 
 if __name__ == "__main__":
