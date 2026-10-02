@@ -178,6 +178,53 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(switch_calls[0]["maxElements"], 80)
         self.assertEqual(switch_calls[0]["maxFrames"], 1)
 
+    def test_response_observation_timeout_waits_within_response_deadline(self):
+        class FakeRelay:
+            def __init__(self):
+                self.actions = []
+                self.get_page_calls = 0
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "getPage":
+                    self.get_page_calls += 1
+                    if self.get_page_calls == 1:
+                        return {
+                            "pageText": "",
+                            "elements": [{"id": "g1-e1", "label": "Enter a prompt for Gemini"}],
+                        }
+                    if self.get_page_calls == 2:
+                        return {
+                            "pageText": "TASK",
+                            "elements": [
+                                {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                                {"id": "g1-e2", "label": "Send message"},
+                            ],
+                        }
+                    if self.get_page_calls in {3, 4}:
+                        raise LauncherError(
+                            "Browser Agent getPage failed: Browser light main-frame observation timed out after 10000ms (f0)"
+                        )
+                    return {
+                        "pageText": 'TASK Gemini said {"kind":"wait","reason":"response-observation-recovered"}',
+                        "elements": [],
+                    }
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 1, "TASK")
+
+        self.assertEqual(
+            result,
+            {"kind": "wait", "reason": "response-observation-recovered"},
+        )
+        self.assertEqual(relay.get_page_calls, 5)
+        self.assertEqual(
+            sum(1 for action, _ in relay.actions if action == "goto"),
+            1,
+        )
+
     def test_streaming_partial_response_can_complete_before_malformed_retry(self):
         class FakeRelay:
             def __init__(self):
