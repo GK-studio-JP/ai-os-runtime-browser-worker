@@ -234,6 +234,11 @@ class GeminiTransientErrorTests(unittest.TestCase):
             sum(1 for action, _ in relay.actions if action == "goto"),
             0,
         )
+        switch_args = next(
+            args for action, args in relay.actions if action == "switchPage"
+        )
+        self.assertEqual(switch_args["observationTimeoutMs"], 30000)
+        self.assertEqual(switch_args["mainFrameObservationTimeoutMs"], 20000)
 
     def test_response_observation_timeout_waits_within_response_deadline(self):
         class FakeRelay:
