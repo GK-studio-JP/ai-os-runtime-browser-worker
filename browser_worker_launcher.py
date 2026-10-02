@@ -57,6 +57,7 @@ GEMINI_RESPONSE_TIMEOUT_SECONDS = 90
 GEMINI_RETRY_SETTLE_TIMEOUT_SECONDS = 10
 GEMINI_RETRY_SETTLE_POLL_SECONDS = 0.5
 GEMINI_MALFORMED_STABLE_POLLS = 3
+GEMINI_VALID_STABLE_POLLS = 3
 AI_OS_CANONICAL_OWNER_ACTOR_ENV = "AI_OS_CANONICAL_OWNER_ACTOR"
 EDITOR_CONTENT_MAX_CHARS = 12000
 EDITOR_CONTENT_LABEL_RE = re.compile(
@@ -728,6 +729,8 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
         retry_reason: str | None = None
         malformed_snapshot: str | None = None
         malformed_stable_polls = 0
+        valid_snapshot: str | None = None
+        valid_stable_polls = 0
         while time.monotonic() < end:
             time.sleep(1.5)
             try:
@@ -744,8 +747,26 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
             text = str(page.get("pageText") or "")
             stopped = not _find(page, label="Stop response")
             commands = _commands(text)
-            if stopped and len(commands) > baseline:
-                return commands[-1]
+            new_command = commands[-1] if len(commands) > baseline else None
+            if new_command is not None:
+                if stopped:
+                    return new_command
+                snapshot = json.dumps(
+                    new_command,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                if snapshot == valid_snapshot:
+                    valid_stable_polls += 1
+                else:
+                    valid_snapshot = snapshot
+                    valid_stable_polls = 1
+                if valid_stable_polls >= GEMINI_VALID_STABLE_POLLS:
+                    return new_command
+            else:
+                valid_snapshot = None
+                valid_stable_polls = 0
             if stopped and _is_gemini_transient_error(text):
                 retry_reason = "transient"
                 break
