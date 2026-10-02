@@ -175,10 +175,14 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(goto_calls[0]["maxElements"], 80)
         self.assertEqual(goto_calls[0]["maxFrames"], 1)
         self.assertEqual(goto_calls[0]["mode"], "light")
+        self.assertEqual(goto_calls[0]["observationTimeoutMs"], 30000)
+        self.assertEqual(goto_calls[0]["mainFrameObservationTimeoutMs"], 20000)
         switch_calls = [args for action, args in relay.actions if action == "switchPage"]
         self.assertEqual(len(switch_calls), 1)
         self.assertEqual(switch_calls[0]["maxElements"], 80)
         self.assertEqual(switch_calls[0]["maxFrames"], 1)
+        self.assertEqual(switch_calls[0]["observationTimeoutMs"], 30000)
+        self.assertEqual(switch_calls[0]["mainFrameObservationTimeoutMs"], 20000)
 
     def test_reuses_switched_gemini_page_without_redundant_goto(self):
         class FakeRelay:
@@ -233,6 +237,81 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(
             sum(1 for action, _ in relay.actions if action == "goto"),
             0,
+        )
+
+    def test_reuses_usable_switched_gemini_observation_before_get_page(self):
+        class FakeRelay:
+            def __init__(self):
+                self.actions = []
+                self.get_page_calls = 0
+                self.pages = [
+                    {
+                        "url": GEMINI,
+                        "generation": 2,
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g2-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "url": GEMINI,
+                        "generation": 3,
+                        "pageText": (
+                            'TASK Gemini said '
+                            '{"kind":"wait","reason":"switched-observation-reused"}'
+                        ),
+                        "elements": [],
+                    },
+                ]
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "switchPage":
+                    return {
+                        "pageIndex": 1,
+                        "page": {
+                            "url": GEMINI,
+                            "generation": 1,
+                            "pageText": "",
+                            "elements": [
+                                {
+                                    "id": "g1-e1",
+                                    "label": "Enter a prompt for Gemini",
+                                }
+                            ],
+                        },
+                    }
+                if action == "getPage":
+                    self.get_page_calls += 1
+                    return self.pages.pop(0)
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 1, "TASK")
+
+        self.assertEqual(
+            result,
+            {"kind": "wait", "reason": "switched-observation-reused"},
+        )
+        self.assertEqual(relay.get_page_calls, 2)
+        self.assertEqual(
+            sum(1 for action, _ in relay.actions if action == "goto"),
+            0,
+        )
+        get_page_args = [
+            args for action, args in relay.actions if action == "getPage"
+        ]
+        self.assertTrue(get_page_args)
+        self.assertTrue(
+            all(args["observationTimeoutMs"] == 30000 for args in get_page_args)
+        )
+        self.assertTrue(
+            all(
+                args["mainFrameObservationTimeoutMs"] == 20000
+                for args in get_page_args
+            )
         )
 
     def test_response_observation_timeout_waits_within_response_deadline(self):
