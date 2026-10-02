@@ -6,8 +6,10 @@ from ai_os_browser_worker.dream_triage import (
     normalize_triage_result,
     triage_prompt,
 )
+from ai_os_browser_worker.relay import DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS
+from browser_worker_launcher import GEMINI
 
-from dream_triage_runner import run_triage
+from dream_triage_runner import _CurrentPageRelay, run_triage
 
 FP = "sha256:" + "a" * 64
 
@@ -90,11 +92,19 @@ class DreamTriageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_triage_result(capsule(), raw)
 
-    def test_runner_reuses_existing_gemini_path(self):
+    def test_runner_reuses_existing_gemini_page(self):
         class Relay:
-            def command(self, action, args):
-                self.last = (action, args)
-                return {"pageIndex": 3}
+            def __init__(self):
+                self.calls = []
+
+            def command(
+                self,
+                action,
+                args=None,
+                timeout=DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS,
+            ):
+                self.calls.append((action, args or {}, timeout))
+                return {"url": GEMINI}
 
         raw = {
             "kind": "finish",
@@ -113,9 +123,37 @@ class DreamTriageTests(unittest.TestCase):
         relay = Relay()
         with patch("dream_triage_runner.ask_gemini", return_value=raw) as ask:
             result = run_triage(relay, capsule())
-        self.assertEqual(relay.last, ("newPage", {}))
-        self.assertEqual(ask.call_args.args[1], 3)
+        self.assertEqual(
+            relay.calls,
+            [("start", {}, DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS)],
+        )
+        wrapped = ask.call_args.args[0]
+        self.assertIsInstance(wrapped, _CurrentPageRelay)
+        self.assertEqual(wrapped.command("switchPage", {"index": 0}), {"pageIndex": 0})
+        self.assertTrue(wrapped.command("goto", {"url": GEMINI})["reusedCurrentPage"])
+        self.assertEqual(len(relay.calls), 1)
         self.assertEqual(result["decision"], "deep")
+
+    def test_current_page_relay_allows_first_gemini_navigation_from_blank(self):
+        class Relay:
+            def __init__(self):
+                self.calls = []
+
+            def command(
+                self,
+                action,
+                args=None,
+                timeout=DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS,
+            ):
+                self.calls.append((action, args or {}, timeout))
+                return {"url": str((args or {}).get("url") or "about:blank")}
+
+        relay = Relay()
+        current = _CurrentPageRelay(relay, current_url="about:blank")
+        current.command("goto", {"url": GEMINI}, timeout=12)
+        self.assertEqual(relay.calls, [("goto", {"url": GEMINI}, 12)])
+        self.assertTrue(current.command("goto", {"url": GEMINI})["reusedCurrentPage"])
+        self.assertEqual(len(relay.calls), 1)
 
     def test_runner_defers_without_gemini(self):
         class Relay:
