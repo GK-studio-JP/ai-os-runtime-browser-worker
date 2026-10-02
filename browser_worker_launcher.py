@@ -701,10 +701,9 @@ def _wait_for_gemini_retry_send(
 
 def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, Any]:
     attempt_prompt = prompt_text
-    relay.command("switchPage", {"index": gemini_index})
+    relay.command("switchPage", {"index": gemini_index, "mode": "light", "maxElements": 80, "maxFrames": 1})
     relay.command("goto", {"url": GEMINI, "mode": "light", "maxElements": 80, "maxFrames": 1})
     for attempt in range(2):
-        relay.command("switchPage", {"index": gemini_index})
         page = _gemini_get_page(relay)
         if dismiss := _find(page, text="Not now"):
             relay.command("click", {"elementId": dismiss["id"]})
