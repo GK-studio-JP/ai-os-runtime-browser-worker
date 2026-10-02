@@ -311,6 +311,7 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
         )
         get_page_calls = 0
         goto_count = 0
+        switch_count = 0
 
         class FakeRelay:
             def __init__(self, base, key, session_id):
@@ -320,7 +321,7 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
                 return {"ready": True}
 
             def command(self, action, args, timeout=None):
-                nonlocal get_page_calls, goto_count
+                nonlocal get_page_calls, goto_count, switch_count
                 if action == "start":
                     return {"url": "about:blank"}
                 if action == "goto":
@@ -340,11 +341,20 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
                 if action == "newPage":
                     return {"pageIndex": 6, "url": args["url"]}
                 if action == "switchPage":
+                    switch_count += 1
+                    if switch_count <= 2:
+                        return {
+                            "pageIndex": 5,
+                            "page": NightlyDreamOperatorLoopTests._work_page(
+                                generation=10 + switch_count,
+                                url=operator.START_URL,
+                            ),
+                        }
                     return {
                         "pageIndex": 5,
                         "page": NightlyDreamOperatorLoopTests._work_page(
-                            generation=10,
-                            url=runbook_url if goto_count > 1 else operator.START_URL,
+                            generation=13,
+                            url=runbook_url,
                             observationStatus="deferred",
                         ),
                     }
