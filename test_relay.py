@@ -2,7 +2,11 @@ import unittest
 from unittest.mock import patch
 
 from ai_os_browser_worker.navigation_policy import LauncherError
-from ai_os_browser_worker.relay import Relay, _transient_relay_error
+from ai_os_browser_worker.relay import (
+    DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS,
+    Relay,
+    _transient_relay_error,
+)
 
 
 class ScriptedRelay(Relay):
@@ -24,6 +28,9 @@ class ScriptedRelay(Relay):
 
 
 class RelayRetryTests(unittest.TestCase):
+    def test_default_command_timeout_exceeds_browser_deadman_max(self):
+        self.assertGreater(DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS, 120)
+
     @patch("ai_os_browser_worker.relay.time.sleep", return_value=None)
     def test_get_page_transient_poll_failure_keeps_same_command_id(self, _sleep):
         relay = ScriptedRelay([
@@ -53,7 +60,7 @@ class RelayRetryTests(unittest.TestCase):
         self.assertEqual(len(posts), 2)
 
     @patch("ai_os_browser_worker.relay.time.sleep", return_value=None)
-    @patch("ai_os_browser_worker.relay.time.monotonic", side_effect=[0.0, 0.0, 76.0])
+    @patch("ai_os_browser_worker.relay.time.monotonic", side_effect=[0.0, 0.0, 136.0])
     def test_command_final_readback_accepts_late_done(self, _monotonic, _sleep):
         relay = ScriptedRelay([
             [{"status": "done", "result": {"url": "https://gemini.google.com/app"}}],
@@ -68,7 +75,7 @@ class RelayRetryTests(unittest.TestCase):
         self.assertEqual(len(gets), 1)
 
     @patch("ai_os_browser_worker.relay.time.sleep", return_value=None)
-    @patch("ai_os_browser_worker.relay.time.monotonic", side_effect=[0.0, 76.0])
+    @patch("ai_os_browser_worker.relay.time.monotonic", side_effect=[0.0, 136.0])
     def test_receipt_final_readback_accepts_late_done(self, _monotonic, _sleep):
         relay = ScriptedRelay([
             [{"status": "done", "result": {"ok": True}}],

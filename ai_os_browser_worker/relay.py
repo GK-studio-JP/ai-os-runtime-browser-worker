@@ -39,6 +39,9 @@ def _json(method: str, url: str, **kwargs: Any) -> Any:
 
 
 RETRYABLE_COMMAND_ACTIONS = {"getPage", "switchPage", "goto"}
+# Stay beyond Browser Agent's maximum 120s relay deadman so the canonical
+# command row can settle before the Worker declares a local timeout.
+DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS = 135
 TRANSIENT_RELAY_ERROR_MARKERS = (
     "supabase 502",
     "502 bad gateway",
@@ -103,7 +106,7 @@ class Relay:
         self,
         action: str,
         args: dict[str, Any] | None = None,
-        timeout: int = 75,
+        timeout: int = DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS,
     ) -> Any:
         command_args = args or {}
         max_attempts = 3 if action in RETRYABLE_COMMAND_ACTIONS else 1
@@ -212,7 +215,7 @@ class Relay:
         *,
         run_id: str,
         step: int,
-        timeout: int = 75,
+        timeout: int = DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS,
     ) -> tuple[Any, dict[str, Any]]:
         """Execute one Browser Agent command and derive runtime-owned evidence."""
 
