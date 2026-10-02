@@ -636,8 +636,17 @@ def _find(
     )
 
 
+def _new_gemini_response_fragment(
+    baseline_text: str,
+    current_text: str,
+) -> str | None:
+    if current_text.count("Gemini said") <= baseline_text.count("Gemini said"):
+        return None
+    return current_text.rsplit("Gemini said", 1)[-1]
+
+
 def _has_new_gemini_response(baseline_text: str, current_text: str) -> bool:
-    return current_text.count("Gemini said") > baseline_text.count("Gemini said")
+    return _new_gemini_response_fragment(baseline_text, current_text) is not None
 
 
 def _is_browser_observation_timeout(error: Exception) -> bool:
@@ -817,7 +826,6 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
                         "Gemini prompt typeText fallback could not be verified"
                     )
         baseline_text = str(page.get("pageText") or "")
-        baseline = len(_commands(baseline_text))
         send = _find(page, label="Send message")
         if not send:
             if attempt == 0:
@@ -846,8 +854,16 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
                 raise
             text = str(page.get("pageText") or "")
             stopped = not _find(page, label="Stop response")
-            commands = _commands(text)
-            new_command = commands[-1] if len(commands) > baseline else None
+            response_fragment = _new_gemini_response_fragment(
+                baseline_text,
+                text,
+            )
+            commands = (
+                _commands(response_fragment)
+                if response_fragment is not None
+                else []
+            )
+            new_command = commands[-1] if commands else None
             if new_command is not None:
                 if stopped:
                     return new_command
@@ -870,8 +886,7 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
             if stopped and _is_gemini_transient_error(text):
                 retry_reason = "transient"
                 break
-            if stopped and _has_new_gemini_response(baseline_text, text):
-                response_fragment = text.rsplit("Gemini said", 1)[-1]
+            if stopped and response_fragment is not None:
                 if response_fragment != malformed_snapshot:
                     malformed_snapshot = response_fragment
                     malformed_stable_polls = 1
