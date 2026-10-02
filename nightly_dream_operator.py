@@ -9,7 +9,12 @@ from typing import Any
 
 from ai_os_browser_worker.navigation_policy import LauncherError, refresh_element_args
 from ai_os_browser_worker.relay import Relay
-from browser_worker_launcher import GEMINI, ask_gemini, reduce_observation
+from browser_worker_launcher import (
+    GEMINI,
+    ask_gemini,
+    gemini_observation_args,
+    reduce_observation,
+)
 
 START_URL = "https://github.com/GK-studio-JP/ai-bulletin-board/issues/52"
 ALLOWED_REPOSITORIES = {
@@ -93,6 +98,21 @@ def _work_observation_args() -> dict[str, Any]:
         "maxFrames": WORK_PAGE_MAX_FRAMES,
         "observationTimeoutMs": WORK_PAGE_OBSERVATION_TIMEOUT_MS,
     }
+
+
+def _existing_gemini_page_index(pages_result: Any) -> int | None:
+    pages = pages_result.get("pages") if isinstance(pages_result, dict) else None
+    if not isinstance(pages, list):
+        raise LauncherError("Browser Agent listPages returned no page list")
+    indexes = [
+        row.get("index")
+        for row in pages
+        if isinstance(row, dict)
+        and str(row.get("url") or "").startswith(GEMINI)
+        and type(row.get("index")) is int
+        and row.get("index") >= 0
+    ]
+    return max(indexes) if indexes else None
 
 
 def _active_work_page_index(pages_result: Any) -> int:
@@ -303,9 +323,23 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
     ):
         initial_page = relay.command("goto", {"url": START_URL})
         cached_page = _page_observation(initial_page)
-    work_page_index = _active_work_page_index(relay.command("listPages", {}))
-    opened = relay.command("newPage", {"url": GEMINI, "pageCreateTimeoutMs": 60000})
-    gemini_index = int(opened.get("pageIndex", 1)) if isinstance(opened, dict) else 1
+    pages_result = relay.command("listPages", {})
+    work_page_index = _active_work_page_index(pages_result)
+    gemini_index = _existing_gemini_page_index(pages_result)
+    if gemini_index is None:
+        opened = relay.command(
+            "newPage",
+            {
+                "url": GEMINI,
+                "pageCreateTimeoutMs": 60000,
+                **gemini_observation_args(),
+            },
+        )
+        gemini_index = (
+            int(opened.get("pageIndex", 1))
+            if isinstance(opened, dict)
+            else 1
+        )
 
     feedback = "Browser Agent is ready. Begin by reading the current Nightly Dream runbook and contract."
     for step in range(1, args.max_steps + 1):
