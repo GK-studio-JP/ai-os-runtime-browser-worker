@@ -165,6 +165,15 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
         self.assertEqual(result["step"], 2)
         self.assertTrue(
             any(
+                row[0] == "getPage"
+                and row[1].get("observationTimeoutMs")
+                == operator.WORK_PAGE_OBSERVATION_TIMEOUT_MS
+                for row in calls
+                if len(row) >= 2 and isinstance(row[1], dict)
+            )
+        )
+        self.assertTrue(
+            any(
                 row[0] == "goto"
                 and row[1].get("url", "").startswith(
                     "https://github.com/GK-studio-JP/ai-os-projects/"
