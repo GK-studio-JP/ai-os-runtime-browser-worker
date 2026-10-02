@@ -163,6 +163,17 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "finished")
         self.assertEqual(result["step"], 2)
+        self.assertIn(
+            (
+                "newPage",
+                {
+                    "url": operator.GEMINI,
+                    "pageCreateTimeoutMs": operator.GEMINI_PAGE_CREATE_TIMEOUT_MS,
+                },
+                None,
+            ),
+            calls,
+        )
         self.assertTrue(
             any(
                 row[0] == "goto"
