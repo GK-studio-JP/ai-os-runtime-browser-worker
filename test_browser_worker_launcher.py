@@ -25,6 +25,7 @@ from browser_worker_launcher import (
     GEMINI_RESPONSE_TIMEOUT_SECONDS,
     LauncherError,
     _has_new_gemini_response,
+    _new_gemini_response_fragment,
     _is_gemini_transient_error,
     ask_gemini,
     _task_payload_from_issue,
@@ -129,6 +130,80 @@ class GeminiTransientErrorTests(unittest.TestCase):
                 "Gemini said old response",
                 "Gemini said old response",
             )
+        )
+
+    def test_prompt_json_duplicates_are_not_model_response(self):
+        prompt_text = (
+            'Use only: {"kind":"browser_action","action":"getPage","args":{},"reason":"..."} '
+            'or {"kind":"finish","summary":"...","reason":"done"} '
+            'or {"kind":"wait","reason":"..."}'
+        )
+
+        self.assertIsNone(
+            _new_gemini_response_fragment(
+                prompt_text,
+                prompt_text + " " + prompt_text + " Flash-Lite Gemini is AI and can make mistakes.",
+            )
+        )
+
+        class FakeRelay:
+            def __init__(self):
+                self.actions = []
+                self.pages = [
+                    {
+                        "url": GEMINI,
+                        "generation": 2,
+                        "pageText": prompt_text,
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g2-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "url": GEMINI,
+                        "generation": 3,
+                        "pageText": prompt_text + " " + prompt_text,
+                        "elements": [],
+                    },
+                    {
+                        "url": GEMINI,
+                        "generation": 4,
+                        "pageText": (
+                            prompt_text
+                            + " "
+                            + prompt_text
+                            + ' Gemini said {"kind":"wait","reason":"real-response"}'
+                        ),
+                        "elements": [],
+                    },
+                ]
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "switchPage":
+                    return {
+                        "pageIndex": 1,
+                        "page": {
+                            "url": GEMINI,
+                            "generation": 1,
+                            "pageText": "",
+                            "elements": [
+                                {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                            ],
+                        },
+                    }
+                if action == "getPage":
+                    return self.pages.pop(0)
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 1, prompt_text)
+
+        self.assertEqual(result, {"kind": "wait", "reason": "real-response"})
+        self.assertGreaterEqual(
+            sum(1 for action, _ in relay.actions if action == "getPage"),
+            3,
         )
 
     def test_gemini_observation_timeout_retries_without_renavigation(self):
