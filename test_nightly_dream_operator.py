@@ -311,5 +311,72 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
         self.assertEqual(get_page_calls, 0)
 
 
+    def test_skips_redundant_control_goto_when_start_already_observed_it(self):
+        goto_calls = 0
+
+        class FakeRelay:
+            def __init__(self, base, key, session_id):
+                self.session = session_id
+
+            def ready(self):
+                return {"ready": True}
+
+            def command(self, action, args, timeout=None):
+                nonlocal goto_calls
+                if action == "start":
+                    return {
+                        "url": operator.START_URL,
+                        "title": "Dream Control",
+                        "generation": 9,
+                        "pageText": "Dream Control",
+                        "elements": [],
+                    }
+                if action == "goto":
+                    goto_calls += 1
+                    return {
+                        "url": args["url"],
+                        "title": "Observed page",
+                        "generation": 10,
+                        "pageText": "Observed page",
+                        "elements": [],
+                    }
+                if action == "newPage":
+                    return {"pageIndex": 1, "url": args["url"]}
+                if action == "getPage":
+                    raise AssertionError("cached start observation should be reused")
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_file = Path(tmp) / "prompt.txt"
+            prompt_file.write_text("Perform the bounded operator test.", encoding="utf-8")
+            args = Namespace(
+                prompt_file=str(prompt_file),
+                session_id="gcp-browser-1",
+                max_steps=1,
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "SUPABASE_URL": "https://relay.example",
+                    "SUPABASE_SECRET_KEY": "secret",
+                },
+                clear=False,
+            ), patch.object(operator, "Relay", FakeRelay), patch.object(
+                operator,
+                "ask_gemini",
+                return_value={
+                    "kind": "finish",
+                    "summary": "Used Browser Agent start observation.",
+                    "artifacts": [],
+                    "evidence": [],
+                    "reason": "done",
+                },
+            ):
+                result = operator.run_operator(args)
+
+        self.assertEqual(result["status"], "finished")
+        self.assertEqual(goto_calls, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
