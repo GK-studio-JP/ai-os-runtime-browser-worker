@@ -229,8 +229,8 @@ class NightlyDreamTriggerProbeTests(unittest.TestCase):
                 calls.append(("ready",))
                 return {"ready": True}
 
-            def command(self, command, args):
-                calls.append((command, args))
+            def command(self, command, args, timeout=None):
+                calls.append((command, args, timeout))
                 if command == "goto":
                     return {"url": "https://gemini.google.com/app"}
                 return {"url": "https://example.invalid/"}
@@ -254,8 +254,8 @@ class NightlyDreamTriggerProbeTests(unittest.TestCase):
             [
                 ("init", "https://relay.example", "test-secret", "gcp-browser-1"),
                 ("ready",),
-                ("start", {}),
-                ("goto", {"url": "https://gemini.google.com/app"}),
+                ("start", {}, None),
+                ("goto", {"url": "https://gemini.google.com/app"}, 240),
             ],
         )
 
