@@ -730,7 +730,17 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
         malformed_stable_polls = 0
         while time.monotonic() < end:
             time.sleep(1.5)
-            page = _gemini_get_page(relay)
+            try:
+                # During Gemini streaming the main frame can be too busy for a
+                # bounded Light observation. The Browser Agent now preserves the
+                # page on observation timeout, so treat that timeout as
+                # "not observable yet" and continue within the existing response
+                # deadline instead of performing three immediate heavy retries.
+                page = _gemini_get_page(relay, attempts=1)
+            except LauncherError as exc:
+                if _is_browser_observation_timeout(exc):
+                    continue
+                raise
             text = str(page.get("pageText") or "")
             stopped = not _find(page, label="Stop response")
             commands = _commands(text)
