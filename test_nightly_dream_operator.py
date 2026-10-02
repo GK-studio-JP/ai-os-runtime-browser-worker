@@ -184,5 +184,71 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
         )
 
 
+    def test_retries_transient_work_page_observation_timeout(self):
+        get_page_calls = 0
+
+        class FakeRelay:
+            def __init__(self, base, key, session_id):
+                self.session = session_id
+
+            def ready(self):
+                return {"ready": True}
+
+            def command(self, action, args, timeout=None):
+                nonlocal get_page_calls
+                if action == "start":
+                    return {"url": "about:blank"}
+                if action == "goto":
+                    return {"url": args["url"]}
+                if action == "newPage":
+                    return {"pageIndex": 1, "url": args["url"]}
+                if action == "getPage":
+                    get_page_calls += 1
+                    if get_page_calls == 1:
+                        raise LauncherError(
+                            "Browser Agent getPage failed: "
+                            "Browser light main-frame observation timed out after 10000ms"
+                        )
+                    return {
+                        "url": operator.START_URL,
+                        "title": "Dream Control",
+                        "generation": 5,
+                        "pageText": "Dream Control",
+                        "elements": [],
+                    }
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_file = Path(tmp) / "prompt.txt"
+            prompt_file.write_text("Perform the Nightly Dream test.", encoding="utf-8")
+            args = Namespace(
+                prompt_file=str(prompt_file),
+                session_id="gcp-browser-1",
+                max_steps=2,
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "SUPABASE_URL": "https://relay.example",
+                    "SUPABASE_SECRET_KEY": "secret",
+                },
+                clear=False,
+            ), patch.object(operator, "Relay", FakeRelay), patch.object(
+                operator,
+                "ask_gemini",
+                return_value={
+                    "kind": "finish",
+                    "summary": "Recovered after transient observation timeout.",
+                    "artifacts": [],
+                    "evidence": [],
+                    "reason": "done",
+                },
+            ), patch("browser_worker_launcher.time.sleep"):
+                result = operator.run_operator(args)
+
+        self.assertEqual(result["status"], "finished")
+        self.assertEqual(get_page_calls, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

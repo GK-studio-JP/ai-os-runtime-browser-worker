@@ -9,7 +9,7 @@ from typing import Any
 
 from ai_os_browser_worker.navigation_policy import LauncherError, refresh_element_args
 from ai_os_browser_worker.relay import Relay
-from browser_worker_launcher import GEMINI, ask_gemini, reduce_observation
+from browser_worker_launcher import GEMINI, _gemini_get_page, ask_gemini, reduce_observation
 
 START_URL = "https://github.com/GK-studio-JP/ai-bulletin-board/issues/52"
 ALLOWED_REPOSITORIES = {
@@ -214,7 +214,7 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
     feedback = "Browser Agent is ready. Begin by reading the current Nightly Dream runbook and contract."
     for step in range(1, args.max_steps + 1):
         relay.command("switchPage", {"index": 0})
-        page = relay.command("getPage", {})
+        page = _gemini_get_page(relay)
         observation = reduce_observation(page, max_text=5000, max_elements=80)
         command = ask_gemini(
             relay,
@@ -248,7 +248,7 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
             action, action_args = validate_operator_action(command, page)
             relay.command("switchPage", {"index": 0})
             if action in {"click", "fill"}:
-                fresh = relay.command("getPage", {})
+                fresh = _gemini_get_page(relay)
                 action_args = refresh_element_args(action, action_args, page, fresh)
             result = relay.command(action, action_args)
             feedback = (
