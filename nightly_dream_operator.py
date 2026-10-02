@@ -27,6 +27,7 @@ DENIED_CONTROL_TERMS = (
 )
 MAX_PROMPT_CHARS = 24000
 MAX_FEEDBACK_CHARS = 4000
+WORK_PAGE_OBSERVATION_TIMEOUT_MS = 60000
 
 
 def _allowed_github_url(url: str) -> str:
@@ -214,7 +215,7 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
     feedback = "Browser Agent is ready. Begin by reading the current Nightly Dream runbook and contract."
     for step in range(1, args.max_steps + 1):
         relay.command("switchPage", {"index": 0})
-        page = _gemini_get_page(relay)
+        page = _gemini_get_page(relay, observation_timeout_ms=WORK_PAGE_OBSERVATION_TIMEOUT_MS)
         observation = reduce_observation(page, max_text=5000, max_elements=80)
         command = ask_gemini(
             relay,
@@ -248,7 +249,7 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
             action, action_args = validate_operator_action(command, page)
             relay.command("switchPage", {"index": 0})
             if action in {"click", "fill"}:
-                fresh = _gemini_get_page(relay)
+                fresh = _gemini_get_page(relay, observation_timeout_ms=WORK_PAGE_OBSERVATION_TIMEOUT_MS)
                 action_args = refresh_element_args(action, action_args, page, fresh)
             result = relay.command(action, action_args)
             feedback = (
