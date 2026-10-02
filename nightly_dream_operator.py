@@ -122,6 +122,10 @@ def _work_page(
     *,
     cached_page: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if cached_page is not None and cached_page.get("observationStatus") != "deferred":
+        _allowed_work_page_url(str(cached_page.get("url") or ""))
+        return cached_page
+
     switched = relay.command(
         "switchPage",
         {"index": work_page_index, **_work_observation_args()},
@@ -132,9 +136,6 @@ def _work_page(
     if page is not None and page.get("observationStatus") != "deferred":
         _allowed_work_page_url(str(page.get("url") or ""))
         return page
-    if cached_page is not None:
-        _allowed_work_page_url(str(cached_page.get("url") or ""))
-        return cached_page
     page = _page_observation(relay.command("getPage", _work_observation_args()))
     if page is None or page.get("observationStatus") == "deferred":
         raise LauncherError(
@@ -142,6 +143,16 @@ def _work_page(
         )
     _allowed_work_page_url(str(page.get("url") or ""))
     return page
+
+
+def _activate_work_page(relay: Relay, work_page_index: int) -> None:
+    activated = relay.command(
+        "switchPage",
+        {"index": work_page_index, "observe": False},
+    )
+    url = str(activated.get("url") or "") if isinstance(activated, dict) else ""
+    if url:
+        _allowed_work_page_url(url)
 
 
 def _element(page: dict[str, Any], element_id: str) -> dict[str, Any] | None:
@@ -346,9 +357,11 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
 
         try:
             action, action_args = validate_operator_action(command, page)
-            fresh = _work_page(relay, work_page_index)
             if action in {"click", "fill"}:
+                fresh = _work_page(relay, work_page_index)
                 action_args = refresh_element_args(action, action_args, page, fresh)
+            else:
+                _activate_work_page(relay, work_page_index)
             if action == "getPage":
                 action_args = {**action_args, **_work_observation_args()}
             result = relay.command(action, action_args)
