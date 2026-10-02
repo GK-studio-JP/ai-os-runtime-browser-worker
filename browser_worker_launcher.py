@@ -673,6 +673,21 @@ def _usable_gemini_observation(value: Any) -> dict[str, Any] | None:
     return page
 
 
+def _is_gemini_fill_timeout(error: Exception) -> bool:
+    message = str(error or "").lower()
+    return "browser agent fill failed" in message and "timeout" in message
+
+
+def _compact_visible_text(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or ""))
+
+
+def _gemini_prompt_is_present(page: dict[str, Any], prompt_text: str) -> bool:
+    expected = _compact_visible_text(prompt_text)
+    visible = _compact_visible_text(page.get("pageText"))
+    return bool(expected) and expected in visible
+
+
 def _gemini_get_page(relay: Relay, attempts: int = 3) -> dict[str, Any]:
     last_error: LauncherError | None = None
     for attempt in range(attempts):
@@ -760,8 +775,15 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
         box = _find(page, label="Enter a prompt for Gemini")
         if not box:
             raise LauncherError("Gemini prompt box unavailable")
-        relay.command("fill", {"elementId": box["id"], "text": attempt_prompt})
-        page = _gemini_get_page(relay)
+        try:
+            relay.command("fill", {"elementId": box["id"], "text": attempt_prompt})
+            page = _gemini_get_page(relay)
+        except LauncherError as exc:
+            if not _is_gemini_fill_timeout(exc):
+                raise
+            page = _gemini_get_page(relay)
+            if not _gemini_prompt_is_present(page, attempt_prompt):
+                raise
         baseline_text = str(page.get("pageText") or "")
         baseline = len(_commands(baseline_text))
         send = _find(page, label="Send message")
