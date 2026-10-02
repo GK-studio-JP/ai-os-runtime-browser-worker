@@ -51,7 +51,7 @@ def _json_after_marker(body: str, marker: str) -> dict[str, Any] | None:
 
 def _fenced_json_objects(body: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    for match in re.finditer(r"```json\\s*(\\{.*?\\})\\s*```", body, re.S | re.I):
+    for match in re.finditer(r"```json\s*(\{.*?\})\s*```", body, re.S | re.I):
         try:
             value = json.loads(match.group(1))
         except json.JSONDecodeError:
