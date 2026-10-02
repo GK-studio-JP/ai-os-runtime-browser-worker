@@ -702,7 +702,7 @@ def _wait_for_gemini_retry_send(
 def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, Any]:
     attempt_prompt = prompt_text
     relay.command("switchPage", {"index": gemini_index})
-    relay.command("goto", {"url": GEMINI})
+    relay.command("goto", {"url": GEMINI, "mode": "light", "maxElements": 80, "maxFrames": 1})
     for attempt in range(2):
         relay.command("switchPage", {"index": gemini_index})
         page = _gemini_get_page(relay)
@@ -938,7 +938,7 @@ def append_issue_comment(
 ) -> None:
     relay.command("switchPage", {"index": page_index})
     relay.command("goto", {"url": issue_url})
-    page = _gemini_get_page(relay)
+    page = relay.command("getPage", {})
     box = next(
         (
             element
@@ -951,7 +951,7 @@ def append_issue_comment(
     if not box:
         raise LauncherError("canonical Issue comment box unavailable")
     relay.command("fill", {"elementId": box["id"], "text": body})
-    page = _gemini_get_page(relay)
+    page = relay.command("getPage", {})
     button = next(
         (
             element
@@ -1097,7 +1097,7 @@ def run_worker(
     relay.command("start", {})
     relay.command("goto", {"url": issue_url})
     ledger: list[dict[str, Any]] = []
-    initial_page = _gemini_get_page(relay)
+    initial_page = relay.command("getPage", {})
     _record_page_evidence(ledger, initial_page)
 
     claim_body = protocol_event_body(
@@ -1144,7 +1144,7 @@ def run_worker(
             claimed = True
 
             relay.command("switchPage", {"index": 0})
-            page = _gemini_get_page(relay)
+            page = relay.command("getPage", {})
             if not source_mutation_performed:
                 page = _enrich_authoritative_editor_source(
                     page,
@@ -1259,7 +1259,7 @@ def run_worker(
             relay.command("switchPage", {"index": 0})
             guard_page = page
             if action in {"click", "fill"}:
-                fresh_page = _gemini_get_page(relay)
+                fresh_page = relay.command("getPage", {})
                 if not source_mutation_performed:
                     fresh_page = _enrich_authoritative_editor_source(
                         fresh_page,
@@ -1328,7 +1328,7 @@ def run_worker(
                 and _source_edit_url(str(guard_page.get("url") or ""), repository)
             ):
                 source_mutation_performed = True
-            page = _gemini_get_page(relay)
+            page = relay.command("getPage", {})
             _record_page_evidence(ledger, page)
             decision = loop_guard.observe_tool_call(
                 agent,
