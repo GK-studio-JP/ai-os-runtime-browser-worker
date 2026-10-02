@@ -265,5 +265,52 @@ class NightlyDreamTriggerProbeTests(unittest.TestCase):
 
 
 
+class NightlyDreamTriggerProbeTests(unittest.TestCase):
+    def test_trigger_probe_only_reaches_browser_agent_and_gemini(self):
+        calls = []
+
+        class FakeRelay:
+            def __init__(self, base, key, session_id):
+                calls.append(("init", base, key, session_id))
+
+            def ready(self):
+                calls.append(("ready",))
+                return {"status": "ready"}
+
+            def command(self, name, payload):
+                calls.append((name, payload))
+                if name == "goto":
+                    return {"url": "https://gemini.google.com/app"}
+                return {"url": "https://example.invalid/"}
+
+        args = Namespace(session_id="probe-session", probe_id="probe-1")
+        with (
+            patch.dict(
+                os.environ,
+                {"SUPABASE_URL": "https://example.supabase.co", "SUPABASE_SECRET_KEY": "secret"},
+                clear=False,
+            ),
+            patch.object(runner, "Relay", FakeRelay),
+            patch.object(
+                runner,
+                "_acquire_production_histories",
+                side_effect=AssertionError("trigger probe must not acquire Dream source"),
+            ),
+        ):
+            result = runner.trigger_probe(args)
+
+        self.assertEqual(result["status"], "trigger_ready")
+        self.assertEqual(result["probe_id"], "probe-1")
+        self.assertEqual(
+            calls,
+            [
+                ("init", "https://example.supabase.co", "secret", "probe-session"),
+                ("ready",),
+                ("start", {}),
+                ("goto", {"url": runner.GEMINI_URL}),
+            ],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
