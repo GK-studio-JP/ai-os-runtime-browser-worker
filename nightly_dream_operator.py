@@ -27,6 +27,9 @@ DENIED_CONTROL_TERMS = (
 )
 MAX_PROMPT_CHARS = 24000
 MAX_FEEDBACK_CHARS = 4000
+WORK_PAGE_OBSERVATION_TIMEOUT_MS = 60000
+WORK_PAGE_MAX_ELEMENTS = 80
+WORK_PAGE_MAX_FRAMES = 8
 
 
 def _allowed_github_url(url: str) -> str:
@@ -148,6 +151,56 @@ def validate_operator_action(
     return action, args
 
 
+
+def _work_observation_args() -> dict[str, Any]:
+    return {
+        "mode": "light",
+        "maxElements": WORK_PAGE_MAX_ELEMENTS,
+        "maxFrames": WORK_PAGE_MAX_FRAMES,
+        "observationTimeoutMs": WORK_PAGE_OBSERVATION_TIMEOUT_MS,
+    }
+
+
+def _active_work_page_index(pages_result: Any) -> int:
+    pages = pages_result.get("pages") if isinstance(pages_result, dict) else None
+    if not isinstance(pages, list):
+        raise LauncherError("Browser Agent listPages returned no page list")
+    active = [
+        row for row in pages
+        if isinstance(row, dict) and row.get("active") is True
+    ]
+    if len(active) != 1:
+        raise LauncherError(
+            f"Browser Agent must expose exactly one active work page; found {len(active)}"
+        )
+    index = active[0].get("index")
+    if type(index) is not int or index < 0:
+        raise LauncherError("Browser Agent active work page has an invalid index")
+    url = str(active[0].get("url") or "")
+    if url and not url.startswith("https://github.com/GK-studio-JP/ai-bulletin-board/"):
+        raise LauncherError(
+            f"Browser Agent active work page is not the Nightly Dream control page: {url}"
+        )
+    return index
+
+
+def _work_page(relay: Relay, work_page_index: int) -> dict[str, Any]:
+    switched = relay.command(
+        "switchPage",
+        {"index": work_page_index, **_work_observation_args()},
+    )
+    page = switched.get("page") if isinstance(switched, dict) else None
+    if (
+        not isinstance(page, dict)
+        or page.get("observationStatus") == "deferred"
+    ):
+        page = relay.command("getPage", _work_observation_args())
+    if not isinstance(page, dict):
+        raise LauncherError("Browser Agent returned no Nightly Dream work-page observation")
+    _allowed_github_url(str(page.get("url") or ""))
+    return page
+
+
 def operator_prompt(
     objective: str,
     observation: dict[str, Any],
@@ -208,13 +261,13 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
     relay.ready()
     relay.command("start", {})
     relay.command("goto", {"url": START_URL})
+    work_page_index = _active_work_page_index(relay.command("listPages", {}))
     opened = relay.command("newPage", {"url": GEMINI, "pageCreateTimeoutMs": 60000})
     gemini_index = int(opened.get("pageIndex", 1)) if isinstance(opened, dict) else 1
 
     feedback = "Browser Agent is ready. Begin by reading the current Nightly Dream runbook and contract."
     for step in range(1, args.max_steps + 1):
-        relay.command("switchPage", {"index": 0})
-        page = _gemini_get_page(relay)
+        page = _work_page(relay, work_page_index)
         observation = reduce_observation(page, max_text=5000, max_elements=80)
         command = ask_gemini(
             relay,
@@ -246,10 +299,11 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
 
         try:
             action, action_args = validate_operator_action(command, page)
-            relay.command("switchPage", {"index": 0})
+            fresh = _work_page(relay, work_page_index)
             if action in {"click", "fill"}:
-                fresh = _gemini_get_page(relay)
                 action_args = refresh_element_args(action, action_args, page, fresh)
+            if action == "getPage":
+                action_args = {**action_args, **_work_observation_args()}
             result = relay.command(action, action_args)
             feedback = (
                 "Executed Browser Agent action successfully: "
