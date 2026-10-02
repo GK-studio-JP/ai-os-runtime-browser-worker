@@ -311,5 +311,68 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
         self.assertEqual(get_page_calls, 0)
 
 
+    def test_reuses_start_observation_when_already_on_control_issue(self):
+        calls = []
+
+        class FakeRelay:
+            def __init__(self, base, key, session_id):
+                self.session = session_id
+
+            def ready(self):
+                return {"ready": True}
+
+            def command(self, action, args, timeout=None):
+                calls.append((action, dict(args), timeout))
+                if action == "start":
+                    return {
+                        "url": operator.START_URL,
+                        "title": "Dream Control",
+                        "generation": 20,
+                        "pageText": "Dream Control",
+                        "elements": [],
+                    }
+                if action == "newPage":
+                    return {"pageIndex": 1, "url": args["url"]}
+                if action == "switchPage":
+                    return {"pageIndex": args["index"]}
+                if action == "getPage":
+                    raise AssertionError("work-page getPage should not be needed")
+                if action == "goto":
+                    raise AssertionError("redundant Control Issue goto should not run")
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            prompt_file = Path(tmp) / "prompt.txt"
+            prompt_file.write_text("Perform the bounded Nightly Dream test.", encoding="utf-8")
+            args = Namespace(
+                prompt_file=str(prompt_file),
+                session_id="gcp-browser-1",
+                max_steps=2,
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "SUPABASE_URL": "https://relay.example",
+                    "SUPABASE_SECRET_KEY": "secret",
+                },
+                clear=False,
+            ), patch.object(operator, "Relay", FakeRelay), patch.object(
+                operator,
+                "ask_gemini",
+                return_value={
+                    "kind": "finish",
+                    "summary": "Used the start observation.",
+                    "artifacts": [],
+                    "evidence": [],
+                    "reason": "done",
+                },
+            ):
+                result = operator.run_operator(args)
+
+        self.assertEqual(result["status"], "finished")
+        self.assertFalse(any(row[0] == "goto" for row in calls))
+        self.assertFalse(any(row[0] == "getPage" for row in calls))
+
+
 if __name__ == "__main__":
     unittest.main()
