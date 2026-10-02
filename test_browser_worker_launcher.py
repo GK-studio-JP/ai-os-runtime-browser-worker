@@ -19,6 +19,7 @@ from ai_os_browser_worker.navigation_policy import (
     validate_mutation_receipt,
 )
 from browser_worker_launcher import (
+    GEMINI,
     GEMINI_MALFORMED_STABLE_POLLS,
     GEMINI_VALID_STABLE_POLLS,
     GEMINI_RESPONSE_TIMEOUT_SECONDS,
@@ -178,6 +179,61 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(len(switch_calls), 1)
         self.assertEqual(switch_calls[0]["maxElements"], 80)
         self.assertEqual(switch_calls[0]["maxFrames"], 1)
+
+    def test_reuses_switched_gemini_page_without_redundant_goto(self):
+        class FakeRelay:
+            def __init__(self):
+                self.actions = []
+                self.pages = [
+                    {
+                        "pageText": "",
+                        "elements": [
+                            {"id": "g1-e1", "label": "Enter a prompt for Gemini"},
+                        ],
+                    },
+                    {
+                        "pageText": "TASK",
+                        "elements": [
+                            {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                            {"id": "g2-e2", "label": "Send message"},
+                        ],
+                    },
+                    {
+                        "pageText": (
+                            'TASK Gemini said '
+                            '{"kind":"wait","reason":"reuse-current-gemini"}'
+                        ),
+                        "elements": [],
+                    },
+                ]
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "switchPage":
+                    return {
+                        "pageIndex": 1,
+                        "page": {
+                            "url": GEMINI,
+                            "generation": 1,
+                            "elements": [],
+                        },
+                    }
+                if action == "getPage":
+                    return self.pages.pop(0)
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 1, "TASK")
+
+        self.assertEqual(
+            result,
+            {"kind": "wait", "reason": "reuse-current-gemini"},
+        )
+        self.assertEqual(
+            sum(1 for action, _ in relay.actions if action == "goto"),
+            0,
+        )
 
     def test_response_observation_timeout_waits_within_response_deadline(self):
         class FakeRelay:
