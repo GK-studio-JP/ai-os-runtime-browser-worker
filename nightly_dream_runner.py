@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from ai_os_browser_worker.dream_triage import deterministic_triage
 from ai_os_browser_worker.navigation_policy import LauncherError
+from ai_os_browser_worker.nightly_dream_probe import trigger_probe
 from ai_os_browser_worker.nightly_dream import (
     cycle_id,
     cycle_state_body,
@@ -41,7 +42,6 @@ CONTROL_ISSUE = 52
 CONTROL_URL = f"https://github.com/{BOARD}/issues/{CONTROL_ISSUE}"
 GITHUB_API = "https://api.github.com"
 DREAM_TITLE_PREFIX = "[AIOS][aios-nightly-dream-run] "
-GEMINI_URL = "https://gemini.google.com/app"
 
 
 def _now() -> datetime:
@@ -379,31 +379,6 @@ def _deferred_from_triage(bundle: dict[str, Any], triage: list[dict[str, Any]], 
             "evidence_refs": source.get("source_refs") or [],
         })
     return out
-
-
-def trigger_probe(args: argparse.Namespace) -> dict[str, Any]:
-    base = os.environ.get("SUPABASE_URL")
-    key = os.environ.get("SUPABASE_SECRET_KEY")
-    if not base or not key:
-        raise LauncherError("SUPABASE_URL and SUPABASE_SECRET_KEY are required")
-
-    relay = Relay(base, key, args.session_id)
-    relay.ready()
-    relay.command("start", {})
-    page = relay.command("goto", {"url": GEMINI_URL})
-    current = str(page.get("url") or "") if isinstance(page, dict) else ""
-    if not current.startswith("https://gemini.google.com/"):
-        page = relay.command("getPage", {})
-        current = str(page.get("url") or "") if isinstance(page, dict) else ""
-    if not current.startswith("https://gemini.google.com/"):
-        raise LauncherError(f"Gemini trigger probe did not reach Gemini; url={current!r}")
-
-    return {
-        "status": "trigger_ready",
-        "probe_id": args.probe_id,
-        "session_id": args.session_id,
-        "gemini_url": current,
-    }
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
