@@ -6,7 +6,6 @@ import os
 import re
 import time
 import urllib.parse
-import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,13 +16,20 @@ from ai_os_browser_worker.navigation_policy import LauncherError
 from ai_os_browser_worker.nightly_dream import (
     cycle_id,
     cycle_state_body,
+    cycle_states,
     deep_prompt,
+    latest_success,
     oldest_open_run,
     parse_iso,
     resolve_window,
     run_issue_body,
 )
 from ai_os_browser_worker.relay import Relay
+from ai_os_browser_worker.nightly_dream_source import (
+    acquire_histories,
+    github_json,
+    history_tuples,
+)
 from browser_worker_launcher import ask_gemini
 from dream_triage_runner import _CurrentPageRelay, run_triage
 from ai_os_context.dream import build_dream_bundle, normalize_dream_report
@@ -43,28 +49,32 @@ def _now() -> datetime:
 
 def _load_histories(path: str) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or value.get("schema") != "aios-dream-histories:v1":
-        raise LauncherError("unsupported Dream histories snapshot")
-    if value.get("repository") != BOARD:
-        raise LauncherError("Dream histories repository mismatch")
-    rows = value.get("histories")
-    if not isinstance(rows, list):
-        raise LauncherError("Dream histories must be a list")
-    out: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
-    seen: set[int] = set()
-    for row in rows:
-        if not isinstance(row, dict):
-            raise LauncherError("Dream history row must be an object")
-        issue = row.get("issue")
-        comments = row.get("comments")
-        if not isinstance(issue, dict) or not isinstance(comments, list):
-            raise LauncherError("Dream history row requires issue and comments")
-        number = issue.get("number")
-        if not isinstance(number, int) or number in seen:
-            raise LauncherError("Dream history issue number is missing or duplicated")
-        seen.add(number)
-        out.append((issue, comments))
-    return out
+    try:
+        return history_tuples(value)
+    except Exception as exc:
+        raise LauncherError(str(exc)) from exc
+
+
+def _github_token() -> str:
+    token = str(os.environ.get("GITHUB_TOKEN") or "").strip()
+    if not token:
+        raise LauncherError("GITHUB_TOKEN is required for authenticated Dream source reads")
+    return token
+
+
+def _acquire_production_histories(snapshot_output: str | None) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    try:
+        snapshot = acquire_histories(token=_github_token(), repository=BOARD)
+        if snapshot_output:
+            target = Path(snapshot_output)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        return history_tuples(snapshot)
+    except Exception as exc:
+        raise LauncherError(f"authenticated Dream source acquisition failed: {exc}") from exc
 
 
 def _history(
@@ -78,16 +88,8 @@ def _history(
 
 
 def _github_json(url: str) -> Any:
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "aios-nightly-dream-gemini-runner",
-        },
-    )
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
-            return json.loads(response.read().decode("utf-8"))
+        return github_json(url, token=_github_token())
     except Exception as exc:
         raise LauncherError(f"GitHub verification read failed: {exc}") from exc
 
@@ -315,6 +317,29 @@ def _memory_context(bundle: dict[str, Any], triage: list[dict[str, Any]]) -> lis
     return results
 
 
+def _deferred_carryover(
+    histories: list[tuple[dict[str, Any], list[dict[str, Any]]]],
+) -> list[dict[str, Any]]:
+    previous = latest_success(histories)
+    if previous is None:
+        return []
+    issue, meta = previous
+    number = int(issue["number"])
+    comments = next(
+        rows for current, rows in histories
+        if int(current.get("number") or 0) == number
+    )
+    for state in reversed(cycle_states(comments)):
+        if (
+            state.get("status") == "completed"
+            and state.get("cycle_id") == meta.get("cycle_id")
+            and state.get("window_end") == meta.get("window_end")
+        ):
+            deferred = state.get("deferred")
+            return [dict(row) for row in deferred] if isinstance(deferred, list) else []
+    return []
+
+
 def _deferred_from_triage(bundle: dict[str, Any], triage: list[dict[str, Any]], cycle: str) -> list[dict[str, Any]]:
     by_task = {
         row.get("task"): row
@@ -340,7 +365,11 @@ def _deferred_from_triage(bundle: dict[str, Any], triage: list[dict[str, Any]], 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     automation_start = parse_iso(args.automation_start) if args.automation_start else _now()
-    histories = _load_histories(args.histories_file)
+    histories = (
+        _load_histories(args.histories_file)
+        if args.histories_file
+        else _acquire_production_histories(args.snapshot_output)
+    )
     control_issue, control_comments = _history(histories, CONTROL_ISSUE)
     control_state = replay(control_issue, control_comments, automation_start)
     if not control_state.history_safe:
@@ -448,7 +477,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             if deterministic is not None:
                 result = deterministic
             else:
-                result = run_triage(relay, capsule)
+                try:
+                    result = run_triage(relay, capsule)
+                except Exception:
+                    result = {
+                        "schema": "aios-dream-triage-result:v1",
+                        "source_fingerprint": capsule["source_fingerprint"],
+                        "triage_version": 1,
+                        "salience": 0.0,
+                        "dimensions": {
+                            "operational_impact": 0.0,
+                            "reuse_scope": 0.0,
+                            "novelty": 0.0,
+                            "recurrence": 0.0,
+                            "evidence_strength": 0.0,
+                        },
+                        "decision": "defer",
+                        "reasons": ["gemini_unavailable"],
+                    }
             triage.append({"task": row["task"], **result})
 
         deep_count = sum(1 for row in triage if row.get("decision") == "deep")
@@ -504,7 +550,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "reject": 0,
             "supersede": 0,
         }
-        deferred = _deferred_from_triage(bundle, triage, cycle)
+        selected_tasks = {
+            str(row.get("task") or "")
+            for row in bundle.get("tasks", [])
+            if isinstance(row, dict)
+        }
+        carryover = [
+            row for row in _deferred_carryover(histories)
+            if not (
+                isinstance(row.get("source_tasks"), list)
+                and len(row["source_tasks"]) == 1
+                and str(row["source_tasks"][0]) in selected_tasks
+            )
+        ]
+        deferred = carryover + _deferred_from_triage(bundle, triage, cycle)
         for proposal in report.get("proposals", []):
             decision = str(proposal.get("decision") or "")
             if decision in counts:
@@ -645,7 +704,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="aios-nightly-dream-gemini-runner")
-    root.add_argument("--histories-file", required=True)
+    root.add_argument("--histories-file")
+    root.add_argument("--snapshot-output")
     root.add_argument("--session-id", default="gcp-browser-1")
     root.add_argument("--automation-start")
     return root
