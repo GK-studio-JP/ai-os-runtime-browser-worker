@@ -227,54 +227,6 @@ class NightlyDreamTriggerProbeTests(unittest.TestCase):
 
             def ready(self):
                 calls.append(("ready",))
-                return {"ready": True}
-
-            def command(self, command, args):
-                calls.append((command, args))
-                if command == "goto":
-                    return {"url": "https://gemini.google.com/app"}
-                return {"url": "https://example.invalid/"}
-
-        args = Namespace(session_id="gcp-browser-1", probe_id="unit-probe")
-        with patch.dict(
-            os.environ,
-            {
-                "SUPABASE_URL": "https://relay.example",
-                "SUPABASE_SECRET_KEY": "test-secret",
-            },
-            clear=False,
-        ), patch.object(runner, "Relay", FakeRelay), patch.object(
-            runner,
-            "_acquire_production_histories",
-            side_effect=AssertionError("trigger probe must not acquire Dream source"),
-        ):
-            result = runner.trigger_probe(args)
-
-        self.assertEqual(result["status"], "trigger_ready")
-        self.assertEqual(result["probe_id"], "unit-probe")
-        self.assertEqual(result["gemini_url"], "https://gemini.google.com/app")
-        self.assertEqual(
-            calls,
-            [
-                ("init", "https://relay.example", "test-secret", "gcp-browser-1"),
-                ("ready",),
-                ("start", {}),
-                ("goto", {"url": "https://gemini.google.com/app"}),
-            ],
-        )
-
-
-
-class NightlyDreamTriggerProbeTests(unittest.TestCase):
-    def test_trigger_probe_only_reaches_browser_agent_and_gemini(self):
-        calls = []
-
-        class FakeRelay:
-            def __init__(self, base, key, session_id):
-                calls.append(("init", base, key, session_id))
-
-            def ready(self):
-                calls.append(("ready",))
                 return {"status": "ready"}
 
             def command(self, name, payload):
