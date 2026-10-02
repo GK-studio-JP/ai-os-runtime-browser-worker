@@ -1,9 +1,32 @@
 import unittest
 
-from browser_worker_launcher import _commands
+from browser_worker_launcher import _commands, _gemini_page
 
 
 class GeminiCommandParsingTests(unittest.TestCase):
+
+    def test_gemini_page_reuses_switch_page_observation(self):
+        class Relay:
+            def __init__(self):
+                self.calls = []
+
+            def command(self, action, args):
+                self.calls.append((action, args))
+                if action != "switchPage":
+                    raise AssertionError(f"unexpected action: {action}")
+                return {
+                    "pageIndex": 3,
+                    "page": {
+                        "url": "https://gemini.google.com/app",
+                        "elements": [{"id": "g1-e1", "label": "Enter a prompt for Gemini"}],
+                    },
+                }
+
+        relay = Relay()
+        page = _gemini_page(relay, 3)
+        self.assertEqual(page["url"], "https://gemini.google.com/app")
+        self.assertEqual(relay.calls, [("switchPage", {"index": 3})])
+
     def test_normal_json_launcher_command_is_unchanged(self):
         text = 'Gemini said {"kind":"wait","reason":"normal"}'
         self.assertEqual(
