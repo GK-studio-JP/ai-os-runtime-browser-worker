@@ -182,6 +182,12 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
         self.assertTrue(any(
             row[0] == "switchPage"
             and row[1].get("index") == work_index
+            and row[1].get("observe") is False
+            for row in calls if len(row)>=2 and isinstance(row[1],dict)
+        ))
+        self.assertFalse(any(
+            row[0] == "switchPage"
+            and row[1].get("index") == work_index
             and row[1].get("observationTimeoutMs")
                 == operator.WORK_PAGE_OBSERVATION_TIMEOUT_MS
             for row in calls if len(row)>=2 and isinstance(row[1],dict)
@@ -226,6 +232,7 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
         )
         self.assertEqual(result["status"],"finished")
         self.assertFalse(any(row[0]=="goto" for row in calls))
+        self.assertFalse(any(row[0]=="switchPage" for row in calls))
 
     def test_deferred_switch_without_cache_uses_long_get_page(self):
         get_page_args=[]
