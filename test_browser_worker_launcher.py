@@ -129,6 +129,50 @@ class GeminiTransientErrorTests(unittest.TestCase):
             )
         )
 
+    def test_gemini_observation_timeout_retries_without_renavigation(self):
+        class FakeRelay:
+            def __init__(self):
+                self.actions = []
+                self.get_page_calls = 0
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "getPage":
+                    self.get_page_calls += 1
+                    if self.get_page_calls == 1:
+                        raise LauncherError(
+                            "Browser Agent getPage failed: Browser light main-frame observation timed out after 10000ms (f0)"
+                        )
+                    if self.get_page_calls == 2:
+                        return {
+                            "pageText": "",
+                            "elements": [{"id": "g2-e1", "label": "Enter a prompt for Gemini"}],
+                        }
+                    if self.get_page_calls == 3:
+                        return {
+                            "pageText": "TASK",
+                            "elements": [
+                                {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                                {"id": "g2-e2", "label": "Send message"},
+                            ],
+                        }
+                    return {
+                        "pageText": 'TASK Gemini said {"kind":"wait","reason":"observation-retry-ok"}',
+                        "elements": [],
+                    }
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 1, "TASK")
+
+        self.assertEqual(result, {"kind": "wait", "reason": "observation-retry-ok"})
+        self.assertGreaterEqual(relay.get_page_calls, 4)
+        self.assertEqual(
+            sum(1 for action, _ in relay.actions if action == "goto"),
+            1,
+        )
+
     def test_streaming_partial_response_can_complete_before_malformed_retry(self):
         class FakeRelay:
             def __init__(self):
@@ -1971,3 +2015,5 @@ class ObservationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+[executed on device: instance-20260926-031048 (49e8ceb9-e3f9-45cd-bc48-7cbc2eb83883)]
