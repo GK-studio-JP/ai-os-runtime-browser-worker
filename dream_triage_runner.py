@@ -19,7 +19,7 @@ def run_triage(
     if deterministic is not None:
         return deterministic
 
-    opened = relay.command("newPage", {"url": GEMINI})
+    opened = relay.command("newPage", {})
     gemini_index = (
         int(opened.get("pageIndex", 1))
         if isinstance(opened, dict)

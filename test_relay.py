@@ -50,6 +50,42 @@ class RelayRetryTests(unittest.TestCase):
         posts = [call for call in relay.calls if call[0] == "POST"]
         self.assertEqual(len(posts), 2)
 
+    @patch("ai_os_browser_worker.relay.time.sleep", return_value=None)
+    @patch("ai_os_browser_worker.relay.time.monotonic", side_effect=[0.0, 0.0, 76.0])
+    def test_command_final_readback_accepts_late_done(self, _monotonic, _sleep):
+        relay = ScriptedRelay([
+            [{"status": "done", "result": {"url": "https://gemini.google.com/app"}}],
+        ])
+
+        result = relay.command("goto", {"url": "https://gemini.google.com/app"})
+
+        self.assertEqual(result["url"], "https://gemini.google.com/app")
+        posts = [call for call in relay.calls if call[0] == "POST"]
+        gets = [call for call in relay.calls if call[0] == "GET"]
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(len(gets), 1)
+
+    @patch("ai_os_browser_worker.relay.time.sleep", return_value=None)
+    @patch("ai_os_browser_worker.relay.time.monotonic", side_effect=[0.0, 76.0])
+    def test_receipt_final_readback_accepts_late_done(self, _monotonic, _sleep):
+        relay = ScriptedRelay([
+            [{"status": "done", "result": {"ok": True}}],
+        ])
+
+        result, receipt = relay.command_with_receipt(
+            "fill",
+            {"elementId": "g1-e1", "text": "x"},
+            run_id="run-final-readback",
+            step=1,
+        )
+
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(receipt["status"], "success")
+        posts = [call for call in relay.calls if call[0] == "POST"]
+        gets = [call for call in relay.calls if call[0] == "GET"]
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(len(gets), 1)
+
     def test_read_operation_timeout_is_transient(self):
         self.assertTrue(
             _transient_relay_error(

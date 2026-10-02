@@ -171,6 +171,28 @@ class Relay:
             if retry:
                 time.sleep(0.5)
                 continue
+
+            # The Browser Agent may finish just after the local polling deadline.
+            # Re-read the canonical command row once before declaring timeout so a
+            # completed command is not misclassified as failed.
+            try:
+                rows = self.rest(
+                    "GET",
+                    f"browser_relay_commands?session_id=eq.{self.session}&command_id=eq.{command_id}&select=status,result,error&limit=1",
+                ) or []
+            except LauncherError as exc:
+                if _transient_relay_error(str(exc)):
+                    last_transient_error = str(exc)
+                    rows = []
+                else:
+                    raise
+            row = rows[0] if rows else {}
+            if row.get("status") == "done":
+                return row.get("result")
+            if row.get("status") == "error":
+                raise LauncherError(
+                    f"Browser Agent {action} failed: {str(row.get('error') or '')}"
+                )
             break
 
         suffix = (
@@ -247,6 +269,48 @@ class Relay:
                     receipt,
                 )
             time.sleep(0.5)
+
+        # As above, reconcile once with the canonical row before emitting a
+        # timeout receipt. This does not repost a mutating command.
+        try:
+            rows = self.rest(
+                "GET",
+                f"browser_relay_commands?session_id=eq.{self.session}&command_id=eq.{command_id}&select=status,result,error&limit=1",
+            ) or []
+        except LauncherError as exc:
+            if _transient_relay_error(str(exc)):
+                last_transient_error = str(exc)
+                rows = []
+            else:
+                raise
+        row = rows[0] if rows else {}
+        if row.get("status") == "done":
+            result = row.get("result")
+            receipt = make_tool_receipt(
+                run_id=run_id,
+                step=step,
+                action_id=command_id,
+                tool=action,
+                status="success",
+                args=command_args,
+                output=result,
+            )
+            return result, receipt
+        if row.get("status") == "error":
+            error = str(row.get("error") or "")
+            receipt = make_tool_receipt(
+                run_id=run_id,
+                step=step,
+                action_id=command_id,
+                tool=action,
+                status="error",
+                args=command_args,
+                output={"error": error},
+            )
+            raise RelayCommandError(
+                f"Browser Agent {action} failed: {error}",
+                receipt,
+            )
 
         timeout_error = "timeout"
         if last_transient_error:
