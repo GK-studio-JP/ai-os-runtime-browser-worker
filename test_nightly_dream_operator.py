@@ -398,6 +398,146 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
             0,
         )
 
+    def test_active_gemini_reuses_inactive_allowed_work_page_without_runtime_goto(self):
+        calls = []
+        work_index = 3
+
+        class FakeRelay:
+            def __init__(self, base, key, session_id):
+                self.session = session_id
+            def ready(self):
+                return {"ready": True}
+            def command(self, action, args, timeout=None):
+                calls.append((action, dict(args), timeout))
+                if action == "start":
+                    return NightlyDreamOperatorLoopTests._page(
+                        generation=2,
+                        url="https://gemini.google.com/app",
+                        title="Gemini",
+                        pageText="Gemini",
+                    )
+                if action == "listPages":
+                    return {"pages": [
+                        {
+                            "index": 0,
+                            "url": "https://gemini.google.com/app",
+                            "active": True,
+                        },
+                        {
+                            "index": work_index,
+                            "url": operator.START_URL,
+                            "active": False,
+                        },
+                    ]}
+                if action == "newPage":
+                    self.assert_not_work_page(args)
+                    return {"pageIndex": 4, "url": args["url"]}
+                if action == "switchPage":
+                    self.assert_work_index(args)
+                    return {
+                        "pageIndex": work_index,
+                        "page": NightlyDreamOperatorLoopTests._page(generation=3),
+                    }
+                if action == "goto":
+                    raise AssertionError("runtime must not force START_URL navigation")
+                return {"ok": True}
+
+            @staticmethod
+            def assert_not_work_page(args):
+                if args.get("url") == "about:blank":
+                    raise AssertionError("existing allowed work page should be reused")
+
+            @staticmethod
+            def assert_work_index(args):
+                if args.get("index") != work_index:
+                    raise AssertionError("wrong work page selected")
+
+        result = self._run(
+            FakeRelay,
+            lambda *a, **k: {
+                "kind": "finish",
+                "summary": "Reused the existing allowed work page.",
+                "artifacts": [],
+                "evidence": [],
+                "reason": "done",
+            },
+            max_steps=1,
+        )
+        self.assertEqual(result["status"], "finished")
+        self.assertFalse(any(row[0] == "goto" for row in calls))
+        self.assertTrue(any(
+            row[0] == "switchPage" and row[1].get("index") == work_index
+            for row in calls
+        ))
+
+    def test_active_gemini_creates_blank_work_page_when_none_exists(self):
+        calls = []
+        work_index = 2
+
+        class FakeRelay:
+            def __init__(self, base, key, session_id):
+                self.session = session_id
+            def ready(self):
+                return {"ready": True}
+            def command(self, action, args, timeout=None):
+                calls.append((action, dict(args), timeout))
+                if action == "start":
+                    return NightlyDreamOperatorLoopTests._page(
+                        generation=2,
+                        url="https://gemini.google.com/app",
+                        title="Gemini",
+                        pageText="Gemini",
+                    )
+                if action == "listPages":
+                    return {"pages": [{
+                        "index": 0,
+                        "url": "https://gemini.google.com/app",
+                        "active": True,
+                    }]}
+                if action == "newPage":
+                    if args.get("url") == "about:blank":
+                        return {
+                            "pageIndex": work_index,
+                            "page": NightlyDreamOperatorLoopTests._page(
+                                generation=3,
+                                url="about:blank",
+                                title="",
+                                pageText="",
+                            ),
+                        }
+                    return {"pageIndex": 3, "url": args["url"]}
+                if action == "switchPage":
+                    return {
+                        "pageIndex": work_index,
+                        "page": NightlyDreamOperatorLoopTests._page(
+                            generation=4,
+                            url="about:blank",
+                            title="",
+                            pageText="",
+                        ),
+                    }
+                if action == "goto":
+                    raise AssertionError("runtime must not choose first GitHub navigation")
+                return {"ok": True}
+
+        result = self._run(
+            FakeRelay,
+            lambda *a, **k: {
+                "kind": "finish",
+                "summary": "Gemini received a blank work page.",
+                "artifacts": [],
+                "evidence": [],
+                "reason": "done",
+            },
+            max_steps=1,
+        )
+        self.assertEqual(result["status"], "finished")
+        self.assertFalse(any(row[0] == "goto" for row in calls))
+        self.assertTrue(any(
+            row[0] == "newPage" and row[1].get("url") == "about:blank"
+            for row in calls
+        ))
+
     def test_requires_exactly_one_active_work_page(self):
         with self.assertRaisesRegex(LauncherError,"exactly one active work page"):
             operator._active_work_page_index({
