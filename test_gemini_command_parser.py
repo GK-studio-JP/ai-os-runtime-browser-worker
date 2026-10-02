@@ -25,7 +25,10 @@ class GeminiCommandParsingTests(unittest.TestCase):
         relay = Relay()
         page = _gemini_page(relay, 3)
         self.assertEqual(page["url"], "https://gemini.google.com/app")
-        self.assertEqual(relay.calls, [("switchPage", {"index": 3})])
+        self.assertEqual(
+            relay.calls,
+            [("switchPage", {"index": 3, "maxElements": 80, "maxFrames": 1})],
+        )
 
     def test_normal_json_launcher_command_is_unchanged(self):
         text = 'Gemini said {"kind":"wait","reason":"normal"}'
