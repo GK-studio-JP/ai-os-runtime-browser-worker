@@ -27,9 +27,10 @@ DENIED_CONTROL_TERMS = (
 )
 MAX_PROMPT_CHARS = 24000
 MAX_FEEDBACK_CHARS = 4000
-WORK_PAGE_OBSERVATION_TIMEOUT_MS = 60000
+WORK_PAGE_OBSERVATION_TIMEOUT_MS = 30000
+WORK_PAGE_MAIN_FRAME_TIMEOUT_MS = 20000
 WORK_PAGE_MAX_ELEMENTS = 80
-WORK_PAGE_MAX_FRAMES = 8
+WORK_PAGE_MAX_FRAMES = 1
 
 
 def _allowed_github_url(url: str) -> str:
@@ -92,6 +93,7 @@ def _work_observation_args() -> dict[str, Any]:
         "maxElements": WORK_PAGE_MAX_ELEMENTS,
         "maxFrames": WORK_PAGE_MAX_FRAMES,
         "observationTimeoutMs": WORK_PAGE_OBSERVATION_TIMEOUT_MS,
+        "mainFrameObservationTimeoutMs": WORK_PAGE_MAIN_FRAME_TIMEOUT_MS,
     }
 
 
