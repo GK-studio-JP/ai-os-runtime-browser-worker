@@ -27,6 +27,7 @@ DENIED_CONTROL_TERMS = (
 )
 MAX_PROMPT_CHARS = 24000
 MAX_FEEDBACK_CHARS = 4000
+GEMINI_PAGE_CREATE_TIMEOUT_MS = 60000
 
 
 def _allowed_github_url(url: str) -> str:
@@ -208,7 +209,10 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
     relay.ready()
     relay.command("start", {})
     relay.command("goto", {"url": START_URL})
-    opened = relay.command("newPage", {"url": GEMINI})
+    opened = relay.command(
+        "newPage",
+        {"url": GEMINI, "pageCreateTimeoutMs": GEMINI_PAGE_CREATE_TIMEOUT_MS},
+    )
     gemini_index = int(opened.get("pageIndex", 1)) if isinstance(opened, dict) else 1
 
     feedback = "Browser Agent is ready. Begin by reading the current Nightly Dream runbook and contract."
