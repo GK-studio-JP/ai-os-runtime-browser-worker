@@ -55,16 +55,21 @@ def _load_histories(path: str) -> list[tuple[dict[str, Any], list[dict[str, Any]
         raise LauncherError(str(exc)) from exc
 
 
-def _github_token() -> str:
+def _github_token() -> str | None:
     token = str(os.environ.get("GITHUB_TOKEN") or "").strip()
-    if not token:
-        raise LauncherError("GITHUB_TOKEN is required for authenticated Dream source reads")
-    return token
+    return token or None
 
 
-def _acquire_production_histories(snapshot_output: str | None) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+def _acquire_production_histories(
+    snapshot_output: str | None,
+    automation_start: datetime,
+) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
     try:
-        snapshot = acquire_histories(token=_github_token(), repository=BOARD)
+        snapshot = acquire_histories(
+            token=_github_token(),
+            repository=BOARD,
+            automation_start=automation_start,
+        )
         if snapshot_output:
             target = Path(snapshot_output)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -368,7 +373,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     histories = (
         _load_histories(args.histories_file)
         if args.histories_file
-        else _acquire_production_histories(args.snapshot_output)
+        else _acquire_production_histories(args.snapshot_output, automation_start)
     )
     control_issue, control_comments = _history(histories, CONTROL_ISSUE)
     control_state = replay(control_issue, control_comments, automation_start)
