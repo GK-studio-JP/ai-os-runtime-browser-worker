@@ -688,6 +688,24 @@ def _gemini_prompt_is_present(page: dict[str, Any], prompt_text: str) -> bool:
     return bool(expected) and expected in visible
 
 
+def _empty_focused_gemini_prompt_box(
+    page: dict[str, Any],
+) -> dict[str, Any] | None:
+    box = _find(page, label="Enter a prompt for Gemini")
+    if not box:
+        return None
+    if _compact_visible_text(box.get("text") or box.get("value")):
+        return None
+    states = box.get("states") if isinstance(box.get("states"), dict) else {}
+    if states.get("focused") is not True:
+        return None
+    if box.get("editable") is not True:
+        return None
+    if box.get("disabled") is True or states.get("readonly") is True:
+        return None
+    return box
+
+
 def _gemini_get_page(relay: Relay, attempts: int = 3) -> dict[str, Any]:
     last_error: LauncherError | None = None
     for attempt in range(attempts):
@@ -783,7 +801,21 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
                 raise
             page = _gemini_get_page(relay)
             if not _gemini_prompt_is_present(page, attempt_prompt):
-                raise
+                fallback_box = _empty_focused_gemini_prompt_box(page)
+                if fallback_box is None:
+                    raise
+                type_error: LauncherError | None = None
+                try:
+                    relay.command("typeText", {"text": attempt_prompt})
+                except LauncherError as fallback_exc:
+                    type_error = fallback_exc
+                page = _gemini_get_page(relay)
+                if not _gemini_prompt_is_present(page, attempt_prompt):
+                    if type_error is not None:
+                        raise type_error
+                    raise LauncherError(
+                        "Gemini prompt typeText fallback could not be verified"
+                    )
         baseline_text = str(page.get("pageText") or "")
         baseline = len(_commands(baseline_text))
         send = _find(page, label="Send message")
