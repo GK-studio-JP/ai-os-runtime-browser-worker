@@ -206,6 +206,22 @@ class GeminiTransientErrorTests(unittest.TestCase):
             3,
         )
 
+    def test_response_fragment_stops_before_next_user_turn(self):
+        baseline = (
+            'You said prompt with {"kind":"wait","reason":"example"}'
+        )
+        current = (
+            baseline
+            + ' Gemini said JSON {"kind":"browser_action","action":"goto",'
+            + '"args":{"url":"https://github.com/GK-studio-JP/ai-os-projects"},'
+            + '"reason":"real"}'
+            + ' You said prompt with {"kind":"wait","reason":"..."}'
+        )
+        fragment = _new_gemini_response_fragment(baseline, current)
+        self.assertIsNotNone(fragment)
+        self.assertIn('"action":"goto"', fragment)
+        self.assertNotIn('"reason":"..."', fragment)
+
     def test_gemini_observation_timeout_retries_without_renavigation(self):
         class FakeRelay:
             def __init__(self):
