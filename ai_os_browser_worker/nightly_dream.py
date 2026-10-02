@@ -35,33 +35,56 @@ def cycle_id(window_start: datetime, window_end: datetime) -> str:
     return "sha256:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _fenced_json_objects(body: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for match in re.finditer(r"```json\s*(\{.*?\})\s*```", body or "", re.S | re.I):
+        try:
+            value = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            out.append(value)
+    return out
+
+
 def _json_after_marker(body: str, marker: str) -> dict[str, Any] | None:
     if marker not in body:
         return None
     tail = body.split(marker, 1)[1]
-    match = re.search(r"```json\s*(\{.*?\})\s*```", tail, re.S | re.I)
-    if not match:
-        return None
-    try:
-        value = json.loads(match.group(1))
-    except json.JSONDecodeError:
-        return None
-    return value if isinstance(value, dict) else None
+    rows = _fenced_json_objects(tail)
+    return rows[0] if rows else None
+
+
+def _unique_schema_object(body: str, schema: str) -> dict[str, Any] | None:
+    rows = [value for value in _fenced_json_objects(body) if value.get("schema") == schema]
+    if len(rows) > 1:
+        raise ValueError(f"ambiguous {schema} metadata")
+    return rows[0] if rows else None
 
 
 def run_metadata(issue: dict[str, Any]) -> dict[str, Any] | None:
-    value = _json_after_marker(str(issue.get("body") or ""), RUN_MARKER)
-    if value is None or value.get("schema") != "aios-dream-run:v1":
-        return None
-    return value
+    body = str(issue.get("body") or "")
+    value = _json_after_marker(body, RUN_MARKER)
+    if value is not None and value.get("schema") == "aios-dream-run:v1":
+        return value
+    # Production Dream Run #53 predates the explicit marker and stores the
+    # aios-dream-run:v1 object as a standalone fenced JSON block. Preserve
+    # compatibility so a v2 runner never loses a valid v1 success watermark.
+    return _unique_schema_object(body, "aios-dream-run:v1")
 
 
 def cycle_states(comments: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for comment in comments:
-        value = _json_after_marker(str(comment.get("body") or ""), CYCLE_MARKER)
+        body = str(comment.get("body") or "")
+        value = _json_after_marker(body, CYCLE_MARKER)
         if value is not None and value.get("schema") == "aios-dream-cycle:v1":
             out.append(value)
+            continue
+        # Legacy production cycle comments were fenced JSON without the marker.
+        legacy = _unique_schema_object(body, "aios-dream-cycle:v1")
+        if legacy is not None:
+            out.append(legacy)
     return out
 
 

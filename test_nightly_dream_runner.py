@@ -95,6 +95,64 @@ class NightlyDreamLogicTests(unittest.TestCase):
         self.assertIsNotNone(found)
         self.assertEqual(found[0]["number"], 53)
 
+    def test_legacy_markerless_run_and_cycle_advance_watermark(self):
+        cycle = "sha256:" + "c" * 64
+        issue = {
+            "number": 53,
+            "state": "closed",
+            "created_at": "2026-10-02T03:40:48Z",
+            "body": (
+                "<!-- ai-os-task:v1 -->\n```json\n"
+                + json.dumps({"process": "PROC-AIOS"})
+                + "\n```\n\n"
+                + "```json\n"
+                + json.dumps(
+                    {
+                        "schema": "aios-dream-run:v1",
+                        "cycle_id": cycle,
+                        "contract_version": 1,
+                        "window_start": "2026-10-01T15:00:00Z",
+                        "window_end": "2026-10-02T02:40:20Z",
+                        "settle_delay_seconds": 3600,
+                        "previous_success_issue": 0,
+                        "previous_success_window_end": None,
+                    }
+                )
+                + "\n```"
+            ),
+        }
+        comments = [
+            {
+                "body": "```json\n"
+                + json.dumps(
+                    {
+                        "schema": "aios-dream-cycle:v1",
+                        "cycle_id": cycle,
+                        "status": "completed",
+                        "window_start": "2026-10-01T15:00:00Z",
+                        "window_end": "2026-10-02T02:40:20Z",
+                        "bundle_fingerprint": "sha256:" + "d" * 64,
+                        "counts": {},
+                        "deferred": [],
+                        "memory_prs": [],
+                        "project_prs": [],
+                    }
+                )
+                + "\n```"
+            },
+            protocol_result(53),
+        ]
+        found = latest_success([(issue, comments)])
+        self.assertIsNotNone(found)
+        self.assertEqual(found[0]["number"], 53)
+        start, end, previous = resolve_window(
+            [(issue, comments)],
+            datetime(2026, 10, 2, 5, 0, tzinfo=timezone.utc),
+        )
+        self.assertEqual(start, datetime(2026, 10, 2, 2, 40, 20, tzinfo=timezone.utc))
+        self.assertEqual(end, datetime(2026, 10, 2, 4, 0, tzinfo=timezone.utc))
+        self.assertEqual(previous, 53)
+
     def test_resolve_window_uses_latest_success(self):
         start = datetime(2026, 10, 2, 0, 0, tzinfo=timezone.utc)
         end = datetime(2026, 10, 2, 2, 0, tzinfo=timezone.utc)
