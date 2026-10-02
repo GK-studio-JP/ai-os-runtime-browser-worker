@@ -18,10 +18,13 @@ from ai_os_browser_worker.nightly_dream import (
     cycle_id,
     cycle_state_body,
     deep_prompt,
+    iso,
+    latest_success,
     oldest_open_run,
     parse_iso,
     resolve_window,
     run_issue_body,
+    run_metadata,
 )
 from ai_os_browser_worker.relay import Relay
 from browser_worker_launcher import ask_gemini
@@ -112,6 +115,136 @@ def _live_comments(issue_number: int) -> list[dict[str, Any]]:
         if len(value) < 100:
             return out
     raise LauncherError("GitHub comments exceeded 100 pages")
+
+
+def _list_issues(*, since: datetime | None = None) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for page in range(1, 101):
+        query: dict[str, str | int] = {
+            "state": "all",
+            "per_page": 100,
+            "page": page,
+        }
+        if since is not None:
+            query["since"] = iso(since)
+        value = _github_json(
+            f"{GITHUB_API}/repos/{BOARD}/issues?"
+            + urllib.parse.urlencode(query)
+        )
+        if not isinstance(value, list):
+            raise LauncherError("GitHub issue discovery returned invalid JSON")
+        out.extend(
+            row
+            for row in value
+            if isinstance(row, dict) and "pull_request" not in row
+        )
+        if len(value) < 100:
+            return out
+    raise LauncherError("GitHub issue discovery exceeded 100 pages")
+
+
+def _validated_history(
+    issue: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    number = issue.get("number")
+    if not isinstance(number, int):
+        raise LauncherError("GitHub issue is missing a numeric number")
+    for field in ("created_at", "updated_at"):
+        if not isinstance(issue.get(field), str):
+            raise LauncherError(
+                f"source-inconsistent: issue #{number} is missing {field}"
+            )
+    comments = _live_comments(number)
+    declared = issue.get("comments")
+    if isinstance(declared, int) and declared != len(comments):
+        raise LauncherError(
+            f"source-inconsistent: issue #{number} declares {declared} comments "
+            f"but {len(comments)} were fetched"
+        )
+    for comment in comments:
+        for field in ("id", "created_at", "updated_at", "author_association", "body"):
+            if comment.get(field) is None:
+                raise LauncherError(
+                    f"source-inconsistent: issue #{number} comment is missing {field}"
+                )
+        user = comment.get("user")
+        if not isinstance(user, dict) or not isinstance(user.get("login"), str):
+            raise LauncherError(
+                f"source-inconsistent: issue #{number} comment is missing actor login"
+            )
+    return issue, comments
+
+
+def _auto_histories(
+    automation_start: datetime,
+) -> list[tuple[dict[str, Any], list[dict[str, Any]]]]:
+    issues = _list_issues()
+    by_number = {
+        int(issue["number"]): issue
+        for issue in issues
+        if isinstance(issue.get("number"), int)
+    }
+    control = by_number.get(CONTROL_ISSUE)
+    if control is None:
+        raise LauncherError("source-inconsistent: Control Issue #52 is missing")
+
+    histories: dict[
+        int,
+        tuple[dict[str, Any], list[dict[str, Any]]],
+    ] = {}
+
+    def include(issue: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        number = int(issue["number"])
+        if number not in histories:
+            histories[number] = _validated_history(issue)
+        return histories[number]
+
+    include(control)
+
+    dream_issues = [
+        issue for issue in issues
+        if run_metadata(issue) is not None
+    ]
+    for issue in dream_issues:
+        if str(issue.get("state") or "").lower() == "open":
+            include(issue)
+
+    closed_candidates: list[tuple[datetime, dict[str, Any]]] = []
+    for issue in dream_issues:
+        if str(issue.get("state") or "").lower() != "closed":
+            continue
+        meta = run_metadata(issue)
+        if meta is None:
+            continue
+        try:
+            end = parse_iso(str(meta["window_end"]))
+        except Exception:
+            continue
+        closed_candidates.append((end, issue))
+    closed_candidates.sort(key=lambda item: item[0], reverse=True)
+    for _end, issue in closed_candidates:
+        history = include(issue)
+        if latest_success([history]) is not None:
+            break
+
+    seed = list(histories.values())
+    resumed = oldest_open_run(seed)
+    if resumed is not None:
+        _issue, meta = resumed
+        window_start = parse_iso(str(meta["window_start"]))
+    else:
+        window_start, _window_end, _previous = resolve_window(
+            seed,
+            automation_start,
+        )
+
+    for issue in _list_issues(since=window_start):
+        include(issue)
+
+    return [
+        histories[number]
+        for number in sorted(histories)
+    ]
 
 
 def _wait_replay(
@@ -340,7 +473,11 @@ def _deferred_from_triage(bundle: dict[str, Any], triage: list[dict[str, Any]], 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     automation_start = parse_iso(args.automation_start) if args.automation_start else _now()
-    histories = _load_histories(args.histories_file)
+    histories = (
+        _load_histories(args.histories_file)
+        if args.histories_file
+        else _auto_histories(automation_start)
+    )
     control_issue, control_comments = _history(histories, CONTROL_ISSUE)
     control_state = replay(control_issue, control_comments, automation_start)
     if not control_state.history_safe:
@@ -645,7 +782,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="aios-nightly-dream-gemini-runner")
-    root.add_argument("--histories-file", required=True)
+    source = root.add_mutually_exclusive_group(required=True)
+    source.add_argument("--histories-file")
+    source.add_argument("--auto-source", action="store_true")
     root.add_argument("--session-id", default="gcp-browser-1")
     root.add_argument("--automation-start")
     return root
