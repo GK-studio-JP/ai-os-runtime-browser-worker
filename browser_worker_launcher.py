@@ -646,13 +646,25 @@ def _is_browser_observation_timeout(error: Exception) -> bool:
     )
 
 
-def _gemini_get_page(relay: Relay, attempts: int = 3) -> dict[str, Any]:
+def _gemini_get_page(
+    relay: Relay,
+    attempts: int = 3,
+    *,
+    observation_timeout_ms: int | None = None,
+) -> dict[str, Any]:
     last_error: LauncherError | None = None
+    command_args: dict[str, Any] = {
+        "mode": "light",
+        "maxElements": 80,
+        "maxFrames": 1,
+    }
+    if observation_timeout_ms is not None:
+        command_args["observationTimeoutMs"] = observation_timeout_ms
     for attempt in range(attempts):
         try:
             return relay.command(
                 "getPage",
-                {"mode": "light", "maxElements": 80, "maxFrames": 1},
+                command_args,
             )
         except LauncherError as exc:
             if not _is_browser_observation_timeout(exc):
