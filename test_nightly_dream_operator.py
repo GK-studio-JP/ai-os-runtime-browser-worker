@@ -243,7 +243,7 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
                     "evidence": [],
                     "reason": "done",
                 },
-            ), patch.object(operator.time, "sleep"):
+            ), patch("browser_worker_launcher.time.sleep"):
                 result = operator.run_operator(args)
 
         self.assertEqual(result["status"], "finished")
