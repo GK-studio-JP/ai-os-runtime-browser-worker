@@ -218,9 +218,14 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
 
     relay = Relay(base, key, args.session_id)
     relay.ready()
-    relay.command("start", {})
-    initial_page = relay.command("goto", {"url": START_URL})
-    cached_page = _page_observation(initial_page)
+    started = relay.command("start", {})
+    cached_page = _page_observation(started)
+    if (
+        cached_page is None
+        or str(cached_page.get("url") or "").rstrip("/") != START_URL.rstrip("/")
+    ):
+        initial_page = relay.command("goto", {"url": START_URL})
+        cached_page = _page_observation(initial_page)
     opened = relay.command("newPage", {"url": GEMINI, "pageCreateTimeoutMs": 60000})
     gemini_index = int(opened.get("pageIndex", 1)) if isinstance(opened, dict) else 1
 
