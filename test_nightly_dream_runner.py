@@ -5,7 +5,7 @@ from argparse import Namespace
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-import nightly_dream_runner as runner
+from ai_os_browser_worker import nightly_dream_probe as probe
 
 from ai_os_browser_worker.nightly_dream import (
     CYCLE_MARKER,
@@ -243,12 +243,8 @@ class NightlyDreamTriggerProbeTests(unittest.TestCase):
                 "SUPABASE_SECRET_KEY": "test-secret",
             },
             clear=False,
-        ), patch.object(runner, "Relay", FakeRelay), patch.object(
-            runner,
-            "_acquire_production_histories",
-            side_effect=AssertionError("trigger probe must not acquire Dream source"),
-        ):
-            result = runner.trigger_probe(args)
+        ), patch.object(probe, "Relay", FakeRelay):
+            result = probe.trigger_probe(args)
 
         self.assertEqual(result["status"], "trigger_ready")
         self.assertEqual(result["probe_id"], "unit-probe")
