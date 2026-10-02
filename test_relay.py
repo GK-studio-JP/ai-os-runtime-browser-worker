@@ -25,7 +25,7 @@ class ScriptedRelay(Relay):
 
 class RelayRetryTests(unittest.TestCase):
     @patch("ai_os_browser_worker.relay.time.sleep", return_value=None)
-    def test_get_page_retries_transient_poll_failure(self, _sleep):
+    def test_get_page_transient_poll_failure_keeps_same_command_id(self, _sleep):
         relay = ScriptedRelay([
             LauncherError("HTTP failure: Supabase 502 Bad Gateway"),
             [{"status": "done", "result": {"generation": 9}}],
@@ -35,7 +35,9 @@ class RelayRetryTests(unittest.TestCase):
 
         self.assertEqual(result, {"generation": 9})
         posts = [call for call in relay.calls if call[0] == "POST"]
-        self.assertEqual(len(posts), 2)
+        self.assertEqual(len(posts), 1)
+        gets = [call for call in relay.calls if call[0] == "GET"]
+        self.assertEqual(len(gets), 2)
 
     @patch("ai_os_browser_worker.relay.time.sleep", return_value=None)
     def test_get_page_retries_transient_command_error(self, _sleep):
