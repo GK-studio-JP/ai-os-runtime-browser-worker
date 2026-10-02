@@ -7,6 +7,7 @@ from ai_os_browser_worker.navigation_policy import LauncherError
 from ai_os_browser_worker.relay import Relay
 
 GEMINI_URL = "https://gemini.google.com/app"
+PROBE_RELAY_TIMEOUT_SECONDS = 240
 
 
 def trigger_probe(args: Namespace) -> dict[str, Any]:
@@ -18,7 +19,7 @@ def trigger_probe(args: Namespace) -> dict[str, Any]:
     relay = Relay(base, key, args.session_id)
     relay.ready()
     relay.command("start", {})
-    page = relay.command("goto", {"url": GEMINI_URL})
+    page = relay.command("goto", {"url": GEMINI_URL}, timeout=PROBE_RELAY_TIMEOUT_SECONDS)
     current = str(page.get("url") or "") if isinstance(page, dict) else ""
     if not current.startswith("https://gemini.google.com/"):
         page = relay.command("getPage", {})
