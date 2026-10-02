@@ -173,6 +173,15 @@ class NightlyDreamOperatorLoopTests(unittest.TestCase):
                 if len(row) >= 2 and isinstance(row[1], dict)
             )
         )
+        self.assertTrue(
+            any(
+                row[0] == "newPage"
+                and row[1].get("url") == operator.GEMINI
+                and row[1].get("pageCreateTimeoutMs") == 60000
+                for row in calls
+                if len(row) >= 2 and isinstance(row[1], dict)
+            )
+        )
 
 
 if __name__ == "__main__":
