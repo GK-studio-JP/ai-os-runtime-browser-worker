@@ -116,6 +116,44 @@ def _active_work_page_index(pages_result: Any) -> int:
     return index
 
 
+def _existing_work_page_index(pages_result: Any) -> int | None:
+    pages = pages_result.get("pages") if isinstance(pages_result, dict) else None
+    if not isinstance(pages, list):
+        raise LauncherError("Browser Agent listPages returned no page list")
+
+    allowed: list[dict[str, Any]] = []
+    active_allowed: list[dict[str, Any]] = []
+    for row in pages:
+        if not isinstance(row, dict):
+            continue
+        index = row.get("index")
+        if type(index) is not int or index < 0:
+            continue
+        url = str(row.get("url") or "")
+        if not _work_page_url_is_allowed(url):
+            continue
+        allowed.append(row)
+        if row.get("active") is True:
+            active_allowed.append(row)
+
+    if len(active_allowed) > 1:
+        raise LauncherError(
+            "Browser Agent exposed multiple active allowed work pages"
+        )
+    if active_allowed:
+        return int(active_allowed[0]["index"])
+
+    github_pages = [
+        row for row in allowed
+        if str(row.get("url") or "") != "about:blank"
+    ]
+    if github_pages:
+        return int(github_pages[0]["index"])
+    if allowed:
+        return int(allowed[0]["index"])
+    return None
+
+
 def _work_page(
     relay: Relay,
     work_page_index: int,
@@ -245,7 +283,7 @@ def operator_prompt(
     feedback: str,
 ) -> str:
     return f"""You are the AIOS Nightly Dream operator. You, Gemini, are the work agent.
-A scheduled GPT only launched this run and handed you this objective plus Browser Agent access.
+A scheduled ChatGPT/Work task only launched this run and handed you this objective plus Browser Agent access.
 The Python runtime is only a safety gate and Browser Agent executor; it does not decide the work for you.
 
 OBJECTIVE:
@@ -266,7 +304,7 @@ or
 
 Rules:
 - You own the reasoning, navigation, issue/comment work, verification, and completion decision.
-- Use Browser Agent only. Do not ask the scheduled GPT to perform work.
+- Use Browser Agent only. Do not ask the scheduled launcher to perform work.
 - For click/fill, use a current-generation elementId from OBSERVATION.
 - Never merge a pull request, delete/archive resources, use repository Settings/Danger Zone, or commit directly to a protected branch.
 - Repository source changes must use a new branch and pull request.
@@ -297,13 +335,37 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
     relay.ready()
     started = relay.command("start", {})
     cached_page = _page_observation(started)
-    if (
-        cached_page is None
-        or not _work_page_url_is_allowed(str(cached_page.get("url") or ""))
-    ):
-        initial_page = relay.command("goto", {"url": START_URL})
-        cached_page = _page_observation(initial_page)
-    work_page_index = _active_work_page_index(relay.command("listPages", {}))
+    pages_result = relay.command("listPages", {})
+    work_page_index = _existing_work_page_index(pages_result)
+
+    if work_page_index is None:
+        created = relay.command(
+            "newPage",
+            {"url": "about:blank", **_work_observation_args()},
+        )
+        created_index = created.get("pageIndex") if isinstance(created, dict) else None
+        if type(created_index) is not int or created_index < 0:
+            raise LauncherError("Browser Agent did not return a valid work-page index")
+        work_page_index = created_index
+        cached_page = _page_observation(
+            created.get("page") if isinstance(created, dict) else None
+        )
+    else:
+        selected = next(
+            (
+                row for row in pages_result.get("pages", [])
+                if isinstance(row, dict) and row.get("index") == work_page_index
+            ),
+            None,
+        )
+        if (
+            not isinstance(selected, dict)
+            or selected.get("active") is not True
+            or cached_page is None
+            or not _work_page_url_is_allowed(str(cached_page.get("url") or ""))
+        ):
+            cached_page = None
+
     opened = relay.command("newPage", {"url": GEMINI, "pageCreateTimeoutMs": 60000})
     gemini_index = int(opened.get("pageIndex", 1)) if isinstance(opened, dict) else 1
 
