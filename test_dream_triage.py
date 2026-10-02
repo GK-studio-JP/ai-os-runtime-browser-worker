@@ -7,6 +7,7 @@ from ai_os_browser_worker.dream_triage import (
     triage_prompt,
 )
 from ai_os_browser_worker.relay import DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS
+from browser_worker_launcher import GEMINI
 
 from dream_triage_runner import _CurrentPageRelay, run_triage
 
@@ -91,7 +92,7 @@ class DreamTriageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalize_triage_result(capsule(), raw)
 
-    def test_runner_reuses_existing_gemini_path_on_current_page(self):
+    def test_runner_reuses_existing_gemini_page(self):
         class Relay:
             def __init__(self):
                 self.calls = []
@@ -103,7 +104,7 @@ class DreamTriageTests(unittest.TestCase):
                 timeout=DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS,
             ):
                 self.calls.append((action, args or {}, timeout))
-                return {"url": "about:blank"}
+                return {"url": GEMINI}
 
         raw = {
             "kind": "finish",
@@ -126,11 +127,14 @@ class DreamTriageTests(unittest.TestCase):
             relay.calls,
             [("start", {}, DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS)],
         )
-        self.assertEqual(ask.call_args.args[1], 0)
-        self.assertIsInstance(ask.call_args.args[0], _CurrentPageRelay)
+        wrapped = ask.call_args.args[0]
+        self.assertIsInstance(wrapped, _CurrentPageRelay)
+        self.assertEqual(wrapped.command("switchPage", {"index": 0}), {"pageIndex": 0})
+        self.assertTrue(wrapped.command("goto", {"url": GEMINI})["reusedCurrentPage"])
+        self.assertEqual(len(relay.calls), 1)
         self.assertEqual(result["decision"], "deep")
 
-    def test_current_page_relay_suppresses_switch_page(self):
+    def test_current_page_relay_allows_first_gemini_navigation_from_blank(self):
         class Relay:
             def __init__(self):
                 self.calls = []
@@ -142,17 +146,14 @@ class DreamTriageTests(unittest.TestCase):
                 timeout=DEFAULT_RELAY_COMMAND_TIMEOUT_SECONDS,
             ):
                 self.calls.append((action, args or {}, timeout))
-                return {"url": "https://gemini.google.com/app"}
+                return {"url": str((args or {}).get("url") or "about:blank")}
 
         relay = Relay()
-        current = _CurrentPageRelay(relay)
-        self.assertEqual(
-            current.command("switchPage", {"index": 0}),
-            {"pageIndex": 0},
-        )
-        self.assertEqual(relay.calls, [])
-        current.command("getPage", {}, timeout=12)
-        self.assertEqual(relay.calls, [("getPage", {}, 12)])
+        current = _CurrentPageRelay(relay, current_url="about:blank")
+        current.command("goto", {"url": GEMINI}, timeout=12)
+        self.assertEqual(relay.calls, [("goto", {"url": GEMINI}, 12)])
+        self.assertTrue(current.command("goto", {"url": GEMINI})["reusedCurrentPage"])
+        self.assertEqual(len(relay.calls), 1)
 
     def test_runner_defers_without_gemini(self):
         class Relay:
