@@ -58,6 +58,21 @@ def _allowed_github_url(url: str) -> str:
     return value
 
 
+def _allowed_work_page_url(url: str) -> str:
+    value = str(url or "").strip()
+    if value == "about:blank":
+        return value
+    return _allowed_github_url(value)
+
+
+def _work_page_url_is_allowed(url: str) -> bool:
+    try:
+        _allowed_work_page_url(url)
+        return True
+    except LauncherError:
+        return False
+
+
 def _page_observation(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
@@ -96,10 +111,8 @@ def _active_work_page_index(pages_result: Any) -> int:
     if type(index) is not int or index < 0:
         raise LauncherError("Browser Agent active work page has an invalid index")
     url = str(active[0].get("url") or "")
-    if url and url.rstrip("/") != START_URL.rstrip("/"):
-        raise LauncherError(
-            f"Browser Agent active work page is not Dream Control #52: {url}"
-        )
+    if url:
+        _allowed_work_page_url(url)
     return index
 
 
@@ -117,17 +130,17 @@ def _work_page(
         switched.get("page") if isinstance(switched, dict) else None
     )
     if page is not None and page.get("observationStatus") != "deferred":
-        _allowed_github_url(str(page.get("url") or ""))
+        _allowed_work_page_url(str(page.get("url") or ""))
         return page
     if cached_page is not None:
-        _allowed_github_url(str(cached_page.get("url") or ""))
+        _allowed_work_page_url(str(cached_page.get("url") or ""))
         return cached_page
     page = _page_observation(relay.command("getPage", _work_observation_args()))
     if page is None or page.get("observationStatus") == "deferred":
         raise LauncherError(
             "Browser Agent returned no usable Nightly Dream work-page observation"
         )
-    _allowed_github_url(str(page.get("url") or ""))
+    _allowed_work_page_url(str(page.get("url") or ""))
     return page
 
 
@@ -286,7 +299,7 @@ def run_operator(args: argparse.Namespace) -> dict[str, Any]:
     cached_page = _page_observation(started)
     if (
         cached_page is None
-        or str(cached_page.get("url") or "").rstrip("/") != START_URL.rstrip("/")
+        or not _work_page_url_is_allowed(str(cached_page.get("url") or ""))
     ):
         initial_page = relay.command("goto", {"url": START_URL})
         cached_page = _page_observation(initial_page)
