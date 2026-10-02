@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -413,43 +414,215 @@ def _publish_request_prompt(
     )
 
 
+def _memory_documents_projection() -> dict[str, Any]:
+    base = str(os.environ.get("SUPABASE_URL") or "").rstrip("/")
+    key = str(os.environ.get("SUPABASE_SECRET_KEY") or "")
+    if not base or not key:
+        raise LauncherError("Memory projection is not configured")
+    url = (
+        base
+        + "/rest/v1/aios_memory_chunks?"
+        + urllib.parse.urlencode({
+            "select": "document_id,title,source_path,type,status",
+            "scope": "eq.global",
+            "limit": "10000",
+        })
+    )
+    request = urllib.request.Request(
+        url,
+        headers={"apikey": key, "Accept": "application/json"},
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        rows = json.loads(response.read().decode("utf-8"))
+    if not isinstance(rows, list):
+        raise LauncherError("Memory projection returned an invalid document list")
+    documents: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        doc_id = str(row.get("document_id") or "").strip()
+        path = str(row.get("source_path") or "").strip()
+        if not doc_id or not path:
+            continue
+        documents.setdefault(
+            doc_id,
+            {
+                "id": doc_id,
+                "title": str(row.get("title") or doc_id),
+                "path": path,
+                "scope": "global",
+                "type": str(row.get("type") or ""),
+                "status": str(row.get("status") or "active"),
+            },
+        )
+    return {
+        "schema": "ai-os-memory-documents:v1",
+        "documents": sorted(documents.values(), key=lambda row: row["id"]),
+    }
+
+
+_SENSITIVE_PATTERNS = (
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"(?i)\\bBearer\\s+[A-Za-z0-9._~+/=-]{12,}\\b"),
+    re.compile(r"\\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sb_secret_[A-Za-z0-9_]{20,})\\b"),
+    re.compile(r"(?i)\\b(?:password|passwd|cookie|api[_-]?key|service[_-]?role[_-]?key)\\s*[:=]\\s*[^\\s\\`]{8,}"),
+)
+
+
 def _validate_publish_plan(
     *,
-    memory_root: Path,
     bundle: dict[str, Any],
     report: dict[str, Any],
     request: dict[str, Any],
+    documents: dict[str, Any],
 ) -> dict[str, Any]:
     request = {key: value for key, value in request.items() if key != "kind"}
-    with tempfile.TemporaryDirectory(prefix="aios-dream-gate-") as temp:
-        root = Path(temp)
-        bundle_path = root / "bundle.json"
-        report_path = root / "report.json"
-        request_path = root / "request.json"
-        output_path = root / "plan.json"
-        for path, value in (
-            (bundle_path, bundle),
-            (report_path, report),
-            (request_path, request),
-        ):
-            path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
-        subprocess.run(
-            [
-                sys.executable,
-                str(memory_root / "scripts" / "dream_publish_gate.py"),
-                "--bundle", str(bundle_path),
-                "--report", str(report_path),
-                "--request", str(request_path),
-                "--documents", str(memory_root / "index" / "documents.json"),
-                "--output", str(output_path),
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        return json.loads(output_path.read_text(encoding="utf-8"))
+    if request.get("schema") != "aios-memory-publish-request:v1":
+        raise ValueError("unsupported Memory publish request")
+    if request.get("authoritative") is not False:
+        raise ValueError("Memory publish request must be non-authoritative")
+    if request.get("bundle_fingerprint") != bundle.get("fingerprint"):
+        raise ValueError("Memory publish request bundle mismatch")
 
+    proposal_id = str(request.get("proposal_id") or "").strip()
+    matches = [
+        row for row in report.get("proposals", [])
+        if isinstance(row, dict) and row.get("proposal_id") == proposal_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("publish request must reference exactly one proposal")
+    proposal = matches[0]
+    if proposal.get("decision") not in {"promote", "supersede"}:
+        raise ValueError("proposal is not publishable")
+    if proposal.get("scope") != "global":
+        raise ValueError("global Memory gate only accepts global proposals")
+
+    source_rows = {
+        row["task"]: row
+        for row in bundle.get("tasks", [])
+        if isinstance(row, dict) and isinstance(row.get("task"), str)
+    }
+    source_tasks = proposal.get("source_tasks")
+    if not isinstance(source_tasks, list) or not source_tasks:
+        raise ValueError("source_tasks are required")
+    for task in source_tasks:
+        row = source_rows.get(task)
+        if not row or row.get("history_safe") is not True or row.get("final_state") != "completed":
+            raise ValueError("publishable proposal requires completed safe source tasks")
+    evidence = proposal.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        raise ValueError("publishable proposal requires evidence")
+    for item in evidence:
+        if not isinstance(item, dict):
+            raise ValueError("invalid evidence")
+        task = item.get("task")
+        ref = item.get("ref")
+        if task not in source_tasks or ref not in source_rows[task].get("source_refs", []):
+            raise ValueError("evidence is not bound to the source bundle")
+
+    doc_type = str(request.get("type") or "").strip()
+    if doc_type not in {"lesson", "troubleshooting"}:
+        raise ValueError("unsupported Memory document type")
+    doc_id = str(request.get("document_id") or "").strip()
+    expected_prefix = "lesson." if doc_type == "lesson" else "troubleshooting."
+    if not doc_id.startswith(expected_prefix):
+        raise ValueError("document_id prefix does not match type")
+    path = str(request.get("path") or "").strip()
+    parts = path.split("/")
+    if (
+        path.startswith("/")
+        or "\\" in path
+        or any(part in {"", ".", ".."} for part in parts)
+        or not path.endswith(".md")
+        or not path.startswith(("knowledge/lessons/", "knowledge/troubleshooting/"))
+    ):
+        raise ValueError("Memory path is outside the Dream allowlist")
+    content = str(request.get("content") or "")
+    if len(content) > 30000 or not re.search(r"(?m)^#\\s+\\S", content):
+        raise ValueError("Memory content is invalid")
+    if any(pattern.search(content) for pattern in _SENSITIVE_PATTERNS):
+        raise ValueError("Memory content contains a prohibited value pattern")
+
+    docs = {
+        row.get("id"): row
+        for row in documents.get("documents", [])
+        if isinstance(row, dict) and isinstance(row.get("id"), str)
+    }
+    paths = {
+        row.get("path"): row.get("id")
+        for row in documents.get("documents", [])
+        if isinstance(row, dict) and isinstance(row.get("path"), str)
+    }
+    operation = str(request.get("operation") or "")
+    if operation not in {"create", "update"}:
+        raise ValueError("operation must be create or update")
+    existing = docs.get(doc_id)
+    if operation == "create":
+        if existing is not None or path in paths:
+            raise ValueError("create target already exists")
+    else:
+        if existing is None or existing.get("path") != path:
+            raise ValueError("update target does not match canonical document")
+
+    supersede = None
+    supersede_id = request.get("supersedes_document_id")
+    if proposal.get("decision") == "supersede":
+        supersede_id = str(supersede_id or "").strip()
+        target = docs.get(supersede_id)
+        if not supersede_id or not target or target.get("status", "active") != "active":
+            raise ValueError("supersede target must be an active canonical document")
+        if supersede_id == doc_id:
+            raise ValueError("document cannot supersede itself")
+        supersede = {"document_id": supersede_id, "status": "superseded"}
+    elif supersede_id is not None:
+        raise ValueError("supersedes_document_id requires supersede decision")
+
+    priority = request.get("priority", 70)
+    if not isinstance(priority, int) or isinstance(priority, bool) or not 0 <= priority <= 100:
+        raise ValueError("priority must be 0..100")
+    metadata = {
+        "id": doc_id,
+        "title": str(request.get("title") or "").strip(),
+        "path": path,
+        "scope": "global",
+        "type": doc_type,
+        "tools": request.get("tools") if isinstance(request.get("tools"), list) else [],
+        "repositories": request.get("repositories") if isinstance(request.get("repositories"), list) else [],
+        "environments": request.get("environments") if isinstance(request.get("environments"), list) else [],
+        "keywords": request.get("keywords") if isinstance(request.get("keywords"), list) else [],
+        "priority": priority,
+        "status": "active",
+    }
+    if not metadata["title"]:
+        raise ValueError("Memory title is required")
+    material = {
+        "bundle_fingerprint": bundle["fingerprint"],
+        "proposal_id": proposal_id,
+        "operation": operation,
+        "metadata": metadata,
+        "content": content,
+        "supersede": supersede,
+        "evidence": evidence,
+    }
+    canonical = json.dumps(material, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    plan_id = "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return {
+        "schema": "aios-memory-publish-plan:v1",
+        "authoritative": False,
+        "plan_id": plan_id,
+        "bundle_fingerprint": bundle["fingerprint"],
+        "proposal_id": proposal_id,
+        "decision": proposal["decision"],
+        "write_mode": "branch_pr_only",
+        "target": metadata,
+        "file": {"path": path, "content": content},
+        "index_mutations": {
+            "upsert": metadata,
+            "supersede": [supersede] if supersede else [],
+        },
+        "direct_canonical_write_allowed": False,
+    }
 
 def _write_status(path: str | None, value: dict[str, Any]) -> None:
     if not path:
@@ -624,9 +797,7 @@ def run_cycle(args: argparse.Namespace) -> int:
         else:
             report = _empty_report(bundle)
 
-        documents = json.loads(
-            (Path(args.memory_root) / "index" / "documents.json").read_text(encoding="utf-8")
-        )
+        documents = _memory_documents_projection()
         publish_plans: list[dict[str, Any]] = []
         for proposal in report.get("proposals", []):
             if proposal["decision"] not in {"promote", "supersede"}:
@@ -639,10 +810,10 @@ def run_cycle(args: argparse.Namespace) -> int:
                         _publish_request_prompt(bundle, report, proposal, documents),
                     )
                     plan = _validate_publish_plan(
-                        memory_root=Path(args.memory_root),
                         bundle=bundle,
                         report=report,
                         request=raw_request,
+                        documents=documents,
                     )
                     publish_plans.append(plan)
                     deferred.append({
