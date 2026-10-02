@@ -8,7 +8,24 @@ from ai_os_browser_worker.dream_triage import (
     triage_prompt,
 )
 from ai_os_browser_worker.relay import Relay
-from browser_worker_launcher import GEMINI, ask_gemini
+from browser_worker_launcher import ask_gemini
+
+
+class _CurrentPageRelay:
+    """Keep Dream triage on the current page while reusing ask_gemini."""
+
+    def __init__(self, relay: Relay):
+        self._relay = relay
+
+    def command(
+        self,
+        action: str,
+        args: dict[str, Any] | None = None,
+        timeout: int = 75,
+    ) -> Any:
+        if action == "switchPage":
+            return {"pageIndex": 0}
+        return self._relay.command(action, args or {}, timeout=timeout)
 
 
 def run_triage(
@@ -19,15 +36,13 @@ def run_triage(
     if deterministic is not None:
         return deterministic
 
-    opened = relay.command("newPage", {"url": GEMINI})
-    gemini_index = (
-        int(opened.get("pageIndex", 1))
-        if isinstance(opened, dict)
-        else 1
-    )
+    # Dream triage owns the Browser Agent page for this bounded model call.
+    # Avoid newPage/switchPage: their eager Light observation can hit the relay
+    # deadman on Gemini even when navigation itself succeeded.
+    relay.command("start", {}, timeout=125)
     raw = ask_gemini(
-        relay,
-        gemini_index,
+        _CurrentPageRelay(relay),
+        0,
         triage_prompt(capsule),
     )
     return normalize_triage_result(capsule, raw)
