@@ -15,7 +15,7 @@ from browser_worker_launcher import GEMINI, ask_gemini
 
 
 class _CurrentPageRelay:
-    """Keep Dream triage on the current page while reusing ask_gemini."""
+    """Keep Dream evaluation on one current page while reusing ask_gemini."""
 
     def __init__(self, relay: Relay, current_url: str = ""):
         self._relay = relay
@@ -42,23 +42,54 @@ class _CurrentPageRelay:
         return result
 
 
+class GeminiEvaluatorSession:
+    """Lazily start one Gemini browser session and reuse it for a Dream cycle."""
+
+    def __init__(self, relay: Relay):
+        self._relay = relay
+        self._page_relay: _CurrentPageRelay | None = None
+
+    @property
+    def started(self) -> bool:
+        return self._page_relay is not None
+
+    def _current_page(self) -> _CurrentPageRelay:
+        if self._page_relay is None:
+            started = self._relay.command("start", {})
+            current_url = (
+                str(started.get("url") or "")
+                if isinstance(started, dict)
+                else ""
+            )
+            self._page_relay = _CurrentPageRelay(
+                self._relay,
+                current_url=current_url,
+            )
+        return self._page_relay
+
+    def triage(self, capsule: dict[str, Any]) -> dict[str, Any]:
+        deterministic = deterministic_triage(capsule)
+        if deterministic is not None:
+            return deterministic
+
+        raw = ask_gemini(
+            self._current_page(),
+            0,
+            triage_prompt(capsule),
+        )
+        return normalize_triage_result(capsule, raw)
+
+    def deep(self, prompt_text: str) -> dict[str, Any]:
+        return ask_gemini(
+            self._current_page(),
+            0,
+            prompt_text,
+        )
+
+
 def run_triage(
     relay: Relay,
     capsule: dict[str, Any],
 ) -> dict[str, Any]:
-    deterministic = deterministic_triage(capsule)
-    if deterministic is not None:
-        return deterministic
-
-    # Dream triage owns the Browser Agent page for this bounded model call.
-    # Ensure the browser exists, then reuse the current page so this path does
-    # not depend on newPage/switchPage. If start already returns Gemini, also
-    # avoid navigating to the identical URL again.
-    started = relay.command("start", {})
-    current_url = str(started.get("url") or "") if isinstance(started, dict) else ""
-    raw = ask_gemini(
-        _CurrentPageRelay(relay, current_url=current_url),
-        0,
-        triage_prompt(capsule),
-    )
-    return normalize_triage_result(capsule, raw)
+    """Backward-compatible one-shot triage helper."""
+    return GeminiEvaluatorSession(relay).triage(capsule)
