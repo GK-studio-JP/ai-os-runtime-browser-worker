@@ -184,6 +184,55 @@ class GeminiTransientErrorTests(unittest.TestCase):
         self.assertEqual(switch_calls[0]["observationTimeoutMs"], 30000)
         self.assertEqual(switch_calls[0]["mainFrameObservationTimeoutMs"], 20000)
 
+    def test_gemini_goto_observation_timeout_retries_same_page(self):
+        class FakeRelay:
+            def __init__(self):
+                self.actions = []
+                self.get_page_calls = 0
+
+            def command(self, action, args):
+                self.actions.append((action, args))
+                if action == "switchPage":
+                    return {"pageIndex": 0, "page": {"url": "about:blank", "generation": 1, "elements": []}}
+                if action == "goto":
+                    raise LauncherError(
+                        "Browser Agent goto failed: Browser light main-frame observation timed out after 19000ms (f0)"
+                    )
+                if action == "getPage":
+                    self.get_page_calls += 1
+                    if self.get_page_calls == 1:
+                        return {
+                            "pageText": "",
+                            "elements": [{"id": "g2-e1", "label": "Enter a prompt for Gemini"}],
+                        }
+                    if self.get_page_calls == 2:
+                        return {
+                            "pageText": "TASK",
+                            "elements": [
+                                {"id": "g2-e1", "label": "Enter a prompt for Gemini"},
+                                {"id": "g2-e2", "label": "Send message"},
+                            ],
+                        }
+                    return {
+                        "pageText": 'TASK Gemini said {"kind":"wait","reason":"goto-timeout-recovered"}',
+                        "elements": [],
+                    }
+                return {}
+
+        relay = FakeRelay()
+        with patch("browser_worker_launcher.time.sleep", return_value=None):
+            result = ask_gemini(relay, 0, "TASK")
+
+        self.assertEqual(
+            result,
+            {"kind": "wait", "reason": "goto-timeout-recovered"},
+        )
+        self.assertEqual(
+            sum(1 for action, _ in relay.actions if action == "goto"),
+            1,
+        )
+        self.assertGreaterEqual(relay.get_page_calls, 3)
+
     def test_reuses_switched_gemini_page_without_redundant_goto(self):
         class FakeRelay:
             def __init__(self):
