@@ -763,7 +763,14 @@ def _wait_for_gemini_retry_send(
 def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, Any]:
     attempt_prompt = prompt_text
     switch_args = {"index": gemini_index, **_gemini_light_args()}
-    switched = relay.command("switchPage", switch_args)
+    try:
+        switched = relay.command("switchPage", switch_args)
+    except LauncherError as exc:
+        if not _is_browser_observation_timeout(exc):
+            raise
+        # switchPage selects the requested tab before observing it. A bounded
+        # observation timeout must not make Gemini navigation unrecoverable.
+        switched = {}
     switched_page = switched.get("page") if isinstance(switched, dict) else None
     switched_url = (
         str(switched_page.get("url") or "")
@@ -774,11 +781,19 @@ def ask_gemini(relay: Relay, gemini_index: int, prompt_text: str) -> dict[str, A
     )
     initial_page = _usable_gemini_observation(switched)
     if not switched_url.startswith(GEMINI):
-        navigated = relay.command(
-            "goto",
-            {"url": GEMINI, **_gemini_light_args()},
-        )
-        initial_page = _usable_gemini_observation(navigated)
+        try:
+            navigated = relay.command(
+                "goto",
+                {"url": GEMINI, **_gemini_light_args()},
+            )
+            initial_page = _usable_gemini_observation(navigated)
+        except LauncherError as exc:
+            if not _is_browser_observation_timeout(exc):
+                raise
+            # Browser Agent preserves active Gemini pages on observation
+            # timeout. Navigation has already committed; retry observation
+            # instead of navigating again and losing the current conversation.
+            initial_page = None
     for attempt in range(2):
         if attempt == 0 and initial_page is not None:
             page = initial_page
